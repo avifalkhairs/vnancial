@@ -1,6 +1,6 @@
 /* Vnancial – phone app (PWA). Data: snapshot.json from Excel via Apps Script; new entries go to the Drive inbox. */
 'use strict';
-const APP_VER = '1.7.0';
+const APP_VER = '1.8.0';
 const $ = (s, el = document) => el.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('vn.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -314,15 +314,66 @@ function kpi() {
   });
   k.TotalBalance = num(k.TotalBalance) + dBal; k.IncThis = num(k.IncThis) + dInc; k.ExpThis = num(k.ExpThis) + dExp;
   k.SafeToday = num(k.SafeToday) - dToday; k.TodayUnpl = num(k.TodayUnpl) + dToday;
-  const sa = staleDays();
-  if (s && s.today && sa > 0) estimateSafe(k, s, sa, ms, td);
+  if (s && s.today && !cfg.demo && S()) recalcSafe(k, s, staleDays(), ms, td);
   return k;
 }
 function dayDiff(a, b) { return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000); }
 function staleDays() { const s = S(); if (!s || !s.today || cfg.demo) return 0; return Math.max(0, dayDiff(String(s.today).slice(0, 10), todayIso())); }
-/* Excel has not refreshed the snapshot for >=1 day: recompute the daily limit from the Excel components + phone entries */
-function estimateSafe(k, s, sa, ms, td) {
-  k.stale = sa; const p = s.prefs || {}; const kp = s.kpi || {};
+
+/* ---- planner maths (same rules as the Excel _Calc sheet) ---- */
+const pd = x => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(x || '')); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+const dim = (y, m) => new Date(y, m + 1, 0).getDate();
+function edate(d, k) { const y = d.getFullYear(), m = d.getMonth() + k; const yy = y + Math.floor(m / 12), mm = ((m % 12) + 12) % 12; return new Date(yy, mm, Math.min(d.getDate(), dim(yy, mm))); }
+const mdiff = (a, b) => (b.getFullYear() - a.getFullYear()) * 12 + b.getMonth() - a.getMonth();
+const dd = (a, b) => Math.round((b - a) / 86400000);
+function planTerms(list, T, pr, sameMonth) {
+  const PStart = new Date(T.getFullYear(), T.getMonth(), 1), PEnd = new Date(T.getFullYear(), T.getMonth(), dim(T.getFullYear(), T.getMonth()));
+  const hOn = pr.SafeBasis === 'Cash balance' && (num(pr.HorizonDays) > 0 || !!pd(pr.HorizonDate));
+  let open = 0, daily = 0, last = null;
+  const P = list.map(p => ({ B: pd(p.date), U: pd(p.until), mo: p.repeat === 'Monthly', ex: p.type !== 'Income', amt: num(p.amt) })).filter(p => p.B && p.amt > 0);
+  P.forEach(p => {
+    if (p.ex) {
+      let occ = null;
+      if (p.mo) { if (p.B <= PEnd) occ = new Date(PStart.getFullYear(), PStart.getMonth(), Math.min(p.B.getDate(), dim(PStart.getFullYear(), PStart.getMonth()))); }
+      else if (p.B >= PStart && p.B <= PEnd) occ = p.B;
+      if (occ && !(p.mo && p.U && p.U < occ)) open += p.amt;
+      if (p.B > PEnd) daily -= p.amt / Math.max(1, dd(T, p.B));
+    } else if (p.B > T) daily += 0.5 * p.amt / Math.max(1, dd(T, p.B));
+    p.kmin = !p.mo || p.B >= T ? 0 : Math.max(0, mdiff(p.B, T) + (edate(p.B, mdiff(p.B, T)) < T ? 1 : 0));
+    let an = null;
+    if (!p.mo) { if (p.B >= T) an = p.B; } else if (p.U) { if (p.U >= T) an = p.U; } else an = edate(p.B, p.kmin);
+    if (an && (!last || an > last)) last = an;
+  });
+  let hEnd = PEnd, res = 0;
+  if (hOn) {
+    const hd = pd(pr.HorizonDate);
+    hEnd = hd ? hd : new Date((last && last > T ? last : T).getTime() + num(pr.HorizonDays) * 86400000);
+    if (hEnd < T) hEnd = T;
+    P.forEach(p => {
+      let cnt;
+      if (!p.mo) cnt = p.B >= T && p.B <= hEnd ? 1 : 0;
+      else { const HL = p.U && p.U < hEnd ? p.U : hEnd; if (HL < p.B) cnt = 0; else { const mh = mdiff(p.B, HL); cnt = Math.max(0, mh + (edate(p.B, mh) > HL ? -1 : 0) - p.kmin + 1); } }
+      res += p.amt * cnt * (p.ex ? 1 : -0.5);
+    });
+  }
+  return { open, daily, res, hOn, hDays: Math.max(1, dd(T, hEnd) + 1), dl: dim(T.getFullYear(), T.getMonth()) - T.getDate() + 1 };
+}
+function excelOpenPlans() {
+  const s = S() || {};
+  return (s.plans || []).filter(p => p.Item && num(p.Amount) > 0 && !/^(done|off)$/i.test(String(p.Status || '')))
+    .map(p => ({ date: p.Date, type: p.Type || 'Expense', amt: num(p.Amount), repeat: p.Repeat || 'Once', until: p.Until }));
+}
+
+/* Daily limit computed on the phone. Used whenever Excel's own figure may be out of date:
+   Excel snapshot is >= 1 day old, or the phone holds entries / plans / settings Excel has not read yet. */
+function recalcSafe(k, s, sa, ms, td) {
+  const T = pd(td), kp = s.kpi || {}, pr = s.prefs || {};
+  const eff = openPlans().map(p => ({ date: p.date, type: p.type, amt: p.amt, repeat: p.repeat, until: p.until }));
+  const sig = a => JSON.stringify(a.map(p => [String(p.date).slice(0, 10), p.type, p.amt, p.repeat, String(p.until || '').slice(0, 10)]).sort());
+  const plansChanged = sig(eff) !== sig(excelOpenPlans());
+  const needs = sa > 0 || plansChanged || unseen().length > 0 || !!setOv;
+  if (!needs) return;
+  k.stale = sa;
   const sameMonth = String(s.today).slice(0, 7) === ms;
   const subs = ((s.lists || {}).subcats || []);
   const info = (cat, sub) => subs.find(x => x.cat === cat && x.sub === sub) || {};
@@ -334,23 +385,20 @@ function estimateSafe(k, s, sa, ms, td) {
     if (o.date === td && !fixed && !sav) unplToday += sg * o.amt;
     if ((o.date || '').slice(0, 7) === ms && !sav) dBudget += sg * o.amt;
   });
-  const cash = p.SafeBasis === 'Cash balance', hor = num(kp.HorizonOnN) === 1 && cash;
-  const margin = num(p.SafeMargin) || 0.8;
+  const unpl = sa > 0 ? unplToday : num(kp.TodayUnpl) + unplToday;
+  const cash = pr.SafeBasis === 'Cash balance', margin = num(pr.SafeMargin) || 0.8;
+  const pt = planTerms(eff, T, pr);
   let allow = null;
-  if (hor) {
-    const hd = Math.max(1, num(kp.HDays) - sa);
-    allow = Math.max(0, num(k.TotalBalance) + unplToday - num(kp.HReserve)) / hd;
+  if (pt.hOn) {
+    allow = Math.max(0, num(k.TotalBalance) + unpl - pt.res) / pt.hDays;
   } else if (sameMonth) {
-    const dl = num(kp.DaysLeft) - sa;
-    if (dl >= 1) {
-      const pool = cash ? num(k.TotalBalance) + unplToday - num(kp.PlanOpenMonth)
-        : num(kp.BudgetLeft) - dBudget + unplToday - num(kp.PlanOpenMonth) - num(kp.FixedReserve);
-      allow = Math.max(0, Math.max(0, pool) / dl + num(kp.PlanDaily));
-    }
+    const dl = pt.dl;
+    const pool = cash ? num(k.TotalBalance) + unpl - pt.open : num(kp.BudgetLeft) - dBudget + unpl - pt.open - num(kp.FixedReserve);
+    allow = Math.max(0, Math.max(0, pool) / dl + pt.daily);
   }
-  if (allow === null) { k.staleMonth = true; k.SafeToday = 0; k.TodayUnpl = unplToday; return; }
+  if (allow === null) { k.staleMonth = true; k.SafeToday = 0; k.TodayUnpl = unpl; return; }
   const as = Math.round(margin * allow / 100) * 100;
-  k.AllowSafe = as; k.TodayUnpl = unplToday; k.SafeToday = as - unplToday;
+  k.AllowSafe = as; k.TodayUnpl = unpl; k.SafeToday = as - unpl;
 }
 function lists() {
   const s = S() || {}; const l = s.lists || {};
