@@ -1,6 +1,6 @@
 /* Vnancial – phone app (PWA). Data: snapshot.json from Excel via Apps Script; new entries go to the Drive inbox. */
 'use strict';
-const APP_VER = '1.6.0';
+const APP_VER = '1.7.0';
 const $ = (s, el = document) => el.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('vn.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -32,7 +32,7 @@ const T = {
     lowest: (v, m) => `Saldo terendah ${v} di ${m}`, projection: 'Proyeksi saldo', upcoming: 'Akan datang', open: n => `${n} terbuka`,
     noPlans: 'Belum ada rencana.', holdings: 'Posisi', record: 'Catat', invValue: 'Nilai pasar', pl: 'Untung/rugi',
     sync: 'Sinkron dengan Excel', connected: 'Tersambung', offline: 'Offline', notSet: 'Belum diatur',
-    lastSync: t => `Diperbarui: ${t}`, waiting: n => `${n} entri menunggu dibaca Excel`, queued: n => `${n} entri belum terkirim`,
+    staleX: n => `Data Excel terakhir ${n} hari lalu. Batas hari ini dihitung HP dari catatan di HP saja (perkiraan).`, staleMonth: 'Excel belum diperbarui sejak bulan lalu. Batas hari ini tidak bisa dihitung; buka Excel sekali.', lastSync: t => `Diperbarui: ${t}`, waiting: n => `${n} entri menunggu dibaca Excel`, queued: n => `${n} entri belum terkirim`,
     syncNow: 'Sinkronkan sekarang', language: 'Bahasa · Language', langNote: 'Berlaku untuk seluruh aplikasi',
     settings: 'Sambungan', url: 'URL Web App (Apps Script)', token: 'Token', test: 'Simpan & coba', demo: 'Lihat demo',
     setupTitle: 'Sambungkan ke Excel', setupNote: 'Tempel URL Web App dan token dari langkah Apps Script di panduan.',
@@ -78,7 +78,7 @@ const T = {
     lowest: (v, m) => `Lowest balance ${v} in ${m}`, projection: 'Projected balance', upcoming: 'Upcoming', open: n => `${n} open`,
     noPlans: 'No plans yet.', holdings: 'Holdings', record: 'Record', invValue: 'Market value', pl: 'Profit/loss',
     sync: 'Sync with Excel', connected: 'Connected', offline: 'Offline', notSet: 'Not set up',
-    lastSync: t => `Updated: ${t}`, waiting: n => `${n} entr${n === 1 ? 'y' : 'ies'} waiting for Excel`, queued: n => `${n} not sent yet`,
+    staleX: n => `Excel data is ${n} day${n === 1 ? '' : 's'} old. Today's limit is estimated by the phone from phone entries only.`, staleMonth: 'Excel has not updated since last month. Today\'s limit cannot be computed; open Excel once.', lastSync: t => `Updated: ${t}`, waiting: n => `${n} entr${n === 1 ? 'y' : 'ies'} waiting for Excel`, queued: n => `${n} not sent yet`,
     syncNow: 'Sync now', language: 'Language · Bahasa', langNote: 'Applies to the whole app',
     settings: 'Connection', url: 'Web App URL (Apps Script)', token: 'Token', test: 'Save & test', demo: 'View demo',
     setupTitle: 'Connect to Excel', setupNote: 'Paste the Web App URL and token from the Apps Script step in the guide.',
@@ -314,7 +314,43 @@ function kpi() {
   });
   k.TotalBalance = num(k.TotalBalance) + dBal; k.IncThis = num(k.IncThis) + dInc; k.ExpThis = num(k.ExpThis) + dExp;
   k.SafeToday = num(k.SafeToday) - dToday; k.TodayUnpl = num(k.TodayUnpl) + dToday;
+  const sa = staleDays();
+  if (s && s.today && sa > 0) estimateSafe(k, s, sa, ms, td);
   return k;
+}
+function dayDiff(a, b) { return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000); }
+function staleDays() { const s = S(); if (!s || !s.today || cfg.demo) return 0; return Math.max(0, dayDiff(String(s.today).slice(0, 10), todayIso())); }
+/* Excel has not refreshed the snapshot for >=1 day: recompute the daily limit from the Excel components + phone entries */
+function estimateSafe(k, s, sa, ms, td) {
+  k.stale = sa; const p = s.prefs || {}; const kp = s.kpi || {};
+  const sameMonth = String(s.today).slice(0, 7) === ms;
+  const subs = ((s.lists || {}).subcats || []);
+  const info = (cat, sub) => subs.find(x => x.cat === cat && x.sub === sub) || {};
+  let unplToday = 0, dBudget = 0;
+  unseen().forEach(o => {
+    if (o.type !== 'Expense') return;
+    const sg = o.sign || 1, raw = o.raw || {}, si = info(raw.Category, raw.SubCategory);
+    const fixed = String(si.fixed || '').toLowerCase() === 'yes', sav = si.bucket === 'Savings';
+    if (o.date === td && !fixed && !sav) unplToday += sg * o.amt;
+    if ((o.date || '').slice(0, 7) === ms && !sav) dBudget += sg * o.amt;
+  });
+  const cash = p.SafeBasis === 'Cash balance', hor = num(kp.HorizonOnN) === 1 && cash;
+  const margin = num(p.SafeMargin) || 0.8;
+  let allow = null;
+  if (hor) {
+    const hd = Math.max(1, num(kp.HDays) - sa);
+    allow = Math.max(0, num(k.TotalBalance) + unplToday - num(kp.HReserve)) / hd;
+  } else if (sameMonth) {
+    const dl = num(kp.DaysLeft) - sa;
+    if (dl >= 1) {
+      const pool = cash ? num(k.TotalBalance) + unplToday - num(kp.PlanOpenMonth)
+        : num(kp.BudgetLeft) - dBudget + unplToday - num(kp.PlanOpenMonth) - num(kp.FixedReserve);
+      allow = Math.max(0, Math.max(0, pool) / dl + num(kp.PlanDaily));
+    }
+  }
+  if (allow === null) { k.staleMonth = true; k.SafeToday = 0; k.TodayUnpl = unplToday; return; }
+  const as = Math.round(margin * allow / 100) * 100;
+  k.AllowSafe = as; k.TodayUnpl = unplToday; k.SafeToday = as - unplToday;
 }
 function lists() {
   const s = S() || {}; const l = s.lists || {};
@@ -428,6 +464,8 @@ const txRow = o => {
 const banner = () => {
   if (cfg.demo) return `<div class="card" style="background:#FFF3C4;padding:10px 14px"><span style="font-weight:600;font-size:13px;color:#6B5000">${t('demoOn')}</span></div>`;
   if (!S()) return `<div class="card" style="background:#FFF3C4"><span style="font-size:13px;color:#6B5000">${t('snapshotOld')}</span></div>`;
+  const sd = staleDays();
+  if (sd > 0) return `<div class="card" style="background:#FFF3C4;padding:10px 14px"><span style="font-size:13px;color:#6B5000">${kpi().staleMonth ? t('staleMonth') : t('staleX')(sd)}</span></div>`;
   return '';
 };
 
