@@ -1,6 +1,6 @@
 /* Vnancial – phone app (PWA). Data: snapshot.json from Excel via Apps Script; new entries go to the Drive inbox. */
 'use strict';
-const APP_VER = '1.4.0';
+const APP_VER = '1.6.0';
 const $ = (s, el = document) => el.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('vn.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -52,8 +52,8 @@ const T = {
     connection: 'Sambungan ke Excel', emptyAuto: 'kosong = otomatis', invHistory: 'Riwayat transaksi', history: 'lihat riwayat', color: 'Warna', hexPh: 'atau kode warna, mis. #F15A23',
     pl_BasisMethod: 'Basis anggaran', pl_BasisManual: 'Jumlah basis manual', pl_OpenDate: 'Tanggal saldo awal', pl_DailyManual: 'Batas harian', pl_EmergMonths: 'Dana darurat (bulan)',
     pl_DebtOn: 'Utang mengubah saldo', pl_FeeCat: 'Kategori biaya transfer', pl_FeeSub: 'Sub-kategori biaya transfer', pl_LocalInbox: 'Folder inbox lokal', pl_CloudInbox: 'Folder inbox Google Drive',
-    pl_Owner: 'Pemilik', pl_InvOn: 'Investasi mengubah saldo', pl_SafeMargin: 'Margin aman belanja', pl_SyncFolder: 'Folder sinkron HP',
-    bm: { 'Last Month': 'Bulan lalu', 'Average 3 Months': 'Rata-rata 3 bulan', 'This Month': 'Bulan ini', 'Manual': 'Manual' }
+    pl_Owner: 'Pemilik', pl_InvOn: 'Investasi mengubah saldo', pl_SafeMargin: 'Margin aman belanja', pl_SyncFolder: 'Folder sinkron HP', pl_SafeBasis: 'Dasar aman belanja', pl_HorizonDays: 'Horizon: hari setelah rencana terakhir', pl_HorizonDate: 'Horizon: sampai tanggal',
+    bm: { 'Last Month': 'Bulan lalu', 'Average 3 Months': 'Rata-rata 3 bulan', 'This Month': 'Bulan ini', 'Manual': 'Manual', 'Budget': 'Anggaran', 'Cash balance': 'Saldo kas' }
   },
   en: {
     home: 'Home', tx: 'Activity', wallet: 'Wallet', more: 'More', add: 'Add', save: 'SAVE',
@@ -98,8 +98,8 @@ const T = {
     connection: 'Connection to Excel', emptyAuto: 'empty = automatic', invHistory: 'Transactions', history: 'see history', color: 'Color', hexPh: 'or a colour code, e.g. #F15A23',
     pl_BasisMethod: 'Budget basis', pl_BasisManual: 'Manual basis amount', pl_OpenDate: 'Opening balance date', pl_DailyManual: 'Daily limit', pl_EmergMonths: 'Emergency fund (months)',
     pl_DebtOn: 'Debt moves balances', pl_FeeCat: 'Transfer fee category', pl_FeeSub: 'Transfer fee sub-category', pl_LocalInbox: 'Local inbox folder', pl_CloudInbox: 'Google Drive inbox folder',
-    pl_Owner: 'Owner', pl_InvOn: 'Investments move balances', pl_SafeMargin: 'Safe-spend margin', pl_SyncFolder: 'Phone sync folder',
-    bm: { 'Last Month': 'Last month', 'Average 3 Months': '3-month average', 'This Month': 'This month', 'Manual': 'Manual' }
+    pl_Owner: 'Owner', pl_InvOn: 'Investments move balances', pl_SafeMargin: 'Safe-spend margin', pl_SyncFolder: 'Phone sync folder', pl_SafeBasis: 'Safe-spend basis', pl_HorizonDays: 'Horizon: days after last plan', pl_HorizonDate: 'Horizon: until date',
+    bm: { 'Last Month': 'Last month', 'Average 3 Months': '3-month average', 'This Month': 'This month', 'Manual': 'Manual', 'Budget': 'Budget', 'Cash balance': 'Cash balance' }
   }
 };
 let lang = LS.get('lang', 'id');
@@ -933,7 +933,7 @@ function openPanel(html, bindFn) {
 /* ---------------------------------------------------------------- settings (same as the Settings sheet in Excel) */
 const PREFS = [['BasisMethod', 'select', ['Last Month', 'Average 3 Months', 'This Month', 'Manual']], ['BasisManual', 'num'], ['OpenDate', 'date'], ['DailyManual', 'num'],
   ['EmergMonths', 'num'], ['DebtOn', 'yesno'], ['InvOn', 'yesno'], ['SafeMargin', 'pct'], ['FeeCat', 'expcat'], ['FeeSub', 'feesub'], ['Owner', 'text'],
-  ['LocalInbox', 'text'], ['CloudInbox', 'text'], ['SyncFolder', 'text']];
+  ['LocalInbox', 'text'], ['CloudInbox', 'text'], ['SyncFolder', 'text'], ['SafeBasis', 'select', ['Budget', 'Cash balance']], ['HorizonDays', 'num'], ['HorizonDate', 'date']];
 const ACC_TYPES = ['Cash', 'Bank', 'E-Wallet', 'Other'];
 const PALETTE = [['BCA Blue', '#005BAC'], ['BRI Blue', '#00529B'], ['BNI Orange', '#F15A23'], ['Mandiri Yellow', '#FFB700'], ['Mandiri Navy', '#003D79'],
   ['GoPay Green', '#00AA13'], ['DANA Blue', '#118EEA'], ['Shopee Orange', '#EE4D2D'], ['OVO Purple', '#4C3494'], ['Cash Green', '#2E7D32'],
@@ -950,7 +950,7 @@ function curSettings() {
   };
 }
 function fmtPref(k, v, type) {
-  if (v === null || v === undefined || v === '') return type === 'num' && k === 'DailyManual' ? t('emptyAuto') : '—';
+  if (v === null || v === undefined || v === '') return (k === 'DailyManual' || k === 'HorizonDays' || k === 'HorizonDate') ? t('emptyAuto') : '—';
   if (type === 'num') return grp(num(v));
   if (type === 'pct') return Math.round(num(v) * 100) + '%';
   if (type === 'date') return fdate(String(v));
@@ -1029,11 +1029,11 @@ function openSetting(kind, i) {
     let options = opts, ty = type;
     if (type === 'expcat') { ty = 'select'; options = d.expCats; }
     if (type === 'feesub') { ty = 'select'; options = d.subs.filter(x => x.cat === d.prefs.FeeCat).map(x => x.sub); if (!options.length) ty = 'text'; }
-    if (type === 'select' && k === 'BasisMethod') options = opts.map(o => [o, t('bm')[o]]);
+    if (type === 'select' && (k === 'BasisMethod' || k === 'SafeBasis')) options = opts.map(o => [o, t('bm')[o]]);
     openForm(t('pl_' + k), [{ label: t('pl_' + k), type: ty, value: d.prefs[k], options }], ([v]) => {
       if (ty === 'pct' && v !== '' && (v <= 0 || v > 1)) return '1–100%';
       d.prefs[k] = v === '' ? null : v; d._prefChanged = { [k]: 1 }; commitSettings(d, ['pref']);
-    }, null, k === 'DailyManual' ? t('emptyAuto') : '');
+    }, null, (k === 'DailyManual' || k === 'HorizonDays' || k === 'HorizonDate') ? t('emptyAuto') : '');
   } else if (kind === 'bucket') {
     const b = d.buckets[i];
     openForm(b.name, [{ label: t('share'), type: 'pct', value: b.share }], ([v]) => { b.share = num(v); commitSettings(d, ['bucket']); },
