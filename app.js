@@ -1,6 +1,6 @@
 /* Vnancial – phone app (PWA). Data: snapshot.json from Excel via Apps Script; new entries go to the Drive inbox. */
 'use strict';
-const APP_VER = '1.0.0';
+const APP_VER = '1.1.0';
 const $ = (s, el = document) => el.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('vn.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -370,7 +370,7 @@ const VIEWS = {
         <div class="row"><p class="lab c-${st}">${t('safeToday')}</p><span class="c-${st}" style="font-size:12px;font-weight:700">${stTxt}</span></div>
         <p class="big" data-count="${Math.max(safe, 0)}" data-key="safe">${rp(Math.max(safe, 0))}</p>
         <div class="bar" style="margin-top:8px"><span data-w="${Math.min(100, used * 100).toFixed(1)}%" style="background:${bcol}"></span></div>
-        <p class="muted" style="margin:7px 0 0">${t('usedOf')(rp(spent), rp(lim))}</p>
+        <p class="muted" style="margin:7px 0 0">${lim > 1 ? t('usedOf')(rp(spent), rp(lim)) : '—'}</p>
       </section>
       ${buckets.length ? `<section class="card">
         <div class="row"><p class="lab">${t('budget')} ${esc(s.period || '')}</p><button class="link press" data-go="budget">${t('detail')}</button></div>
@@ -780,12 +780,37 @@ function DEMO() {
   return DEMO.c;
 }
 
+
+/* ---------------------------------------------------------------- splash */
+const QUOTES = {
+  id: ['Catat dulu, baru atur.', 'Uang kecil yang dicatat lebih berharga daripada uang besar yang terlupa.', 'Sisihkan untuk tabungan sebelum belanja, bukan sesudahnya.',
+    'Anggaran bukan pembatas, melainkan peta.', 'Bedakan yang dibutuhkan dari yang diinginkan.', 'Dana darurat adalah ketenangan yang bisa ditabung.',
+    'Utang terasa ringan saat diambil, berat saat dibayar.', 'Konsisten yang kecil mengalahkan semangat besar yang sesaat.',
+    'Kekayaan dibangun dari kebiasaan, bukan keberuntungan.', 'Hemat hari ini, leluasa esok hari.'],
+  en: ['Track it first, then manage it.', 'A small amount tracked beats a large amount forgotten.', 'Save before you spend, not after.',
+    'A budget is not a cage, it is a map.', 'Know the difference between a need and a want.', 'An emergency fund is peace of mind you can save.',
+    'Debt feels light when taken and heavy when repaid.', 'Small and steady beats big and brief.',
+    'Wealth is built from habits, not luck.', 'Spend wisely today, live freely tomorrow.']
+};
+const splashT0 = performance.now();
+(function () {
+  const q = QUOTES[lang] || QUOTES.id; const el = document.getElementById('sp-quote');
+  if (el) el.textContent = q[Math.floor(Math.random() * q.length)];
+  requestAnimationFrame(() => requestAnimationFrame(() => { const f = document.getElementById('sp-fill'); if (f) f.style.width = '72%'; }));
+})();
+function hideSplash() {
+  const sp = document.getElementById('splash'); if (!sp || sp.dataset.done) return; sp.dataset.done = 1;
+  const wait = Math.max(0, 1400 - (performance.now() - splashT0));
+  setTimeout(() => { const f = document.getElementById('sp-fill'); if (f) { f.style.transition = 'width .35s ease'; f.style.width = '100%'; }
+    setTimeout(() => { sp.classList.add('out'); setTimeout(() => sp.remove(), 500); }, 380); }, wait);
+}
+
 /* ---------------------------------------------------------------- start */
 document.documentElement.lang = lang;
 history.pushState({}, '');
 if (!cfg.url && !cfg.demo) stack = ['setup'];
 render('fade');
-if (cfg.url && !cfg.demo) sync(false);
+if (cfg.url && !cfg.demo) { sync(false).finally(hideSplash); setTimeout(hideSplash, 4000); } else hideSplash();
 window.addEventListener('online', () => { online = true; sync(false); });
 window.addEventListener('offline', () => { online = false; rerender(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && cfg.url && !cfg.demo) sync(false); });

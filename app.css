@@ -71,7 +71,7 @@ button{font-family:inherit;color:inherit;cursor:pointer}
 .daylab{padding-top:12px}
 
 /* bottom nav */
-.nav{flex:none;height:calc(70px + var(--safe-bot));padding-bottom:var(--safe-bot);background:#fff;border-top:1px solid #DCDCD6;display:flex;align-items:center;justify-content:space-around;
+.nav{position:relative;z-index:5;flex:none;height:calc(70px + var(--safe-bot));padding-bottom:var(--safe-bot);background:#fff;border-top:1px solid #DCDCD6;display:flex;align-items:center;justify-content:space-around;
   transition:transform .3s var(--ease)}
 .nav.hide{transform:translateY(110%)}
 .nav a{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;font-weight:600;color:#6B6B6B;text-decoration:none;min-width:58px;min-height:48px;justify-content:center;transition:color .2s}
@@ -127,3 +127,15 @@ select.input{appearance:none;background-image:linear-gradient(45deg,transparent 
 .switch .chip.on{background:var(--ink);color:#fff}
 
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* splash */
+#splash{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .45s var(--ease),transform .45s var(--ease)}
+#splash.out{opacity:0;transform:scale(1.04);pointer-events:none}
+.sp-logo{width:31vw;max-width:150px;height:auto;animation:sp-in .7s var(--spring) both}
+.sp-word{margin-top:22px;font:700 clamp(30px,9vw,44px)/1 'Barlow Semi Condensed',sans-serif;letter-spacing:2px;color:#1F1F1F;animation:rise .6s .15s var(--ease) both}
+.sp-word .v{color:var(--orange)}
+.sp-foot{position:absolute;left:0;right:0;bottom:calc(64px + var(--safe-bot));display:flex;flex-direction:column;align-items:center;gap:14px;padding:0 40px;animation:rise .6s .3s var(--ease) both}
+.sp-bar{width:min(180px,46vw);height:4px;border-radius:9px;background:#DCDCD6;overflow:hidden}
+.sp-bar span{display:block;height:100%;width:0;background:var(--orange);border-radius:9px;transition:width 1.1s var(--ease)}
+#sp-quote{margin:0;text-align:center;color:var(--muted);font-size:13px;line-height:1.45;max-width:290px;font-style:italic}
+@keyframes sp-in{from{opacity:0;transform:scale(.8)}to{opacity:1;transform:none}}
