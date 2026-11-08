@@ -1,6 +1,6 @@
 /* Vnancial – phone app (PWA). Data: snapshot.json from Excel via Apps Script; new entries go to the Drive inbox. */
 'use strict';
-const APP_VER = '1.3.0';
+const APP_VER = '1.4.0';
 const $ = (s, el = document) => el.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('vn.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -49,7 +49,7 @@ const T = {
     addAcc: '+ Tambah akun', addCat: '+ Tambah kategori', addSub: '+ Tambah sub-kategori', name: 'Nama', type: 'Jenis', opening: 'Saldo awal', bucket: 'Kelompok anggaran', fixed: 'Tagihan tetap?',
     yes: 'Ya', no: 'Tidak', share: 'Porsi', total: 'Total', mustTotal: 'Total harus 100%', savedSet: 'Disimpan · Excel ikut memperbarui',
     renameNote: 'Transaksi lama tetap memakai nama lama.', lastItem: 'Minimal harus ada satu.', exists: 'Nama sudah ada.', needName: 'Isi nama',
-    connection: 'Sambungan ke Excel', emptyAuto: 'kosong = otomatis', color: 'Warna', hexPh: 'atau kode warna, mis. #F15A23',
+    connection: 'Sambungan ke Excel', emptyAuto: 'kosong = otomatis', invHistory: 'Riwayat transaksi', history: 'lihat riwayat', color: 'Warna', hexPh: 'atau kode warna, mis. #F15A23',
     pl_BasisMethod: 'Basis anggaran', pl_BasisManual: 'Jumlah basis manual', pl_OpenDate: 'Tanggal saldo awal', pl_DailyManual: 'Batas harian', pl_EmergMonths: 'Dana darurat (bulan)',
     pl_DebtOn: 'Utang mengubah saldo', pl_FeeCat: 'Kategori biaya transfer', pl_FeeSub: 'Sub-kategori biaya transfer', pl_LocalInbox: 'Folder inbox lokal', pl_CloudInbox: 'Folder inbox Google Drive',
     pl_Owner: 'Pemilik', pl_InvOn: 'Investasi mengubah saldo', pl_SafeMargin: 'Margin aman belanja', pl_SyncFolder: 'Folder sinkron HP',
@@ -95,7 +95,7 @@ const T = {
     addAcc: '+ Add account', addCat: '+ Add category', addSub: '+ Add sub-category', name: 'Name', type: 'Type', opening: 'Opening balance', bucket: 'Budget bucket', fixed: 'Fixed bill?',
     yes: 'Yes', no: 'No', share: 'Share', total: 'Total', mustTotal: 'Total must be 100%', savedSet: 'Saved · Excel will update',
     renameNote: 'Older transactions keep the old name.', lastItem: 'At least one is needed.', exists: 'That name already exists.', needName: 'Enter a name',
-    connection: 'Connection to Excel', emptyAuto: 'empty = automatic', color: 'Color', hexPh: 'or a colour code, e.g. #F15A23',
+    connection: 'Connection to Excel', emptyAuto: 'empty = automatic', invHistory: 'Transactions', history: 'see history', color: 'Color', hexPh: 'or a colour code, e.g. #F15A23',
     pl_BasisMethod: 'Budget basis', pl_BasisManual: 'Manual basis amount', pl_OpenDate: 'Opening balance date', pl_DailyManual: 'Daily limit', pl_EmergMonths: 'Emergency fund (months)',
     pl_DebtOn: 'Debt moves balances', pl_FeeCat: 'Transfer fee category', pl_FeeSub: 'Transfer fee sub-category', pl_LocalInbox: 'Local inbox folder', pl_CloudInbox: 'Google Drive inbox folder',
     pl_Owner: 'Owner', pl_InvOn: 'Investments move balances', pl_SafeMargin: 'Safe-spend margin', pl_SyncFolder: 'Phone sync folder',
@@ -324,12 +324,26 @@ function lists() {
   return { sub, expCats: expCats.length ? expCats : [...new Set(sub.map(x => x.cat))], incCats };
 }
 function openPlans() {
-  const s = S() || {};
+  const s = S() || {}; const del = delSet();
   const ps = (s.plans || []).filter(p => p.Item && num(p.Amount) > 0 && !/^(done|off)$/i.test(String(p.Status || '')))
-    .map(p => ({ date: p.Date, item: p.Item, type: p.Type || 'Expense', cat: p.Category, amt: num(p.Amount), repeat: p.Repeat || 'Once', until: p.Until, st: 'ok' }));
-  pending.concat(queue).filter(r => String(r.Type).toLowerCase() === 'plan')
-    .forEach(r => ps.push({ date: r.Date, item: r.Description, type: r.SubCategory || 'Expense', cat: r.Category, amt: num(r.Amount), repeat: r.ToAccount || 'Once', until: '', st: 'pending' }));
-  return ps.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    .map(p => ({ date: p.Date, item: p.Item, type: p.Type || 'Expense', cat: p.Category, amt: num(p.Amount), repeat: p.Repeat || 'Once', until: p.Until, st: 'ok', ref: '',
+                 key: 'PLAN|' + String(p.Date || '').slice(0, 10) + '|' + p.Item + '|' + num(p.Amount) }));
+  pending.map(r => [r, 'pending']).concat(queue.map(r => [r, 'queued'])).filter(([r]) => String(r.Type).toLowerCase() === 'plan')
+    .forEach(([r, st]) => ps.push({ date: r.Date, item: r.Description, type: r.SubCategory || 'Expense', cat: r.Category, amt: num(r.Amount), repeat: r.ToAccount || 'Once', until: '', notes: r.Notes || '', st, ref: r.Ref, key: '' }));
+  return ps.filter(p => !(p.ref ? del.has(p.ref) : del.has(p.key))).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+}
+// investment transactions (Excel + not yet read), newest first
+function invTx() {
+  const s = S() || {}; const del = delSet(); const out = [];
+  (s.investment || []).filter(r => r.Ticker).forEach(r => out.push({ ref: r.Ref || '', st: 'ok', raw: { Ref: r.Ref || '', Type: 'Investment', Date: r.Date, Description: clean(r.Ticker),
+    Amount: num(r.Price), Category: clean(r.Action), SubCategory: r.Units == null ? '' : String(r.Units), Account: clean(r.Account), ToAccount: '', Party: '', Notes: '', Fee: num(r.Fee) || '' } }));
+  const excelRefs = new Set(out.map(o => o.ref).filter(Boolean));
+  pending.map(r => [r, 'pending']).concat(queue.map(r => [r, 'queued'])).forEach(([r, st]) => {
+    const ty = String(r.Type).toLowerCase();
+    if (ty === 'investment' && !excelRefs.has(r.Ref)) out.push({ ref: r.Ref, st, raw: Object.assign({}, r) });
+    if (ty === 'edit:investment') { const i = out.findIndex(o => o.ref === r.Ref); if (i >= 0) out.splice(i, 1); out.push({ ref: r.Ref, st, raw: Object.assign({}, r, { Type: 'Investment' }) }); }
+  });
+  return out.filter(o => !(o.ref && del.has(o.ref))).sort((a, b) => String(b.raw.Date || '').localeCompare(String(a.raw.Date || '')));
 }
 const actLabel = a => ({ Borrow: t('borrow'), Repay: t('repay'), Lend: t('lend'), Collect: t('collect'), Buy: t('buy'), Sell: t('sell'), Dividend: t('dividend') }[a] || a || '');
 const typeColor = ty => ({ Expense: ['#FCE4DE', '#C0392B'], Income: ['#DDEBFA', '#1D63B8'], Transfer: ['#E8E8E3', '#404040'], Debt: ['#E6F2DC', '#3F7A1E'], Plan: ['#EEE6F7', '#5B3BA6'] }[ty] || ['#EEE', '#333']);
@@ -547,8 +561,8 @@ const VIEWS = {
     const list = showSettled ? done : open;
     const row = d => {
       const mine = num(d.iOwe) > 0;
-      return `<div class="tx"><div class="dot" style="background:#EDEDE8;color:#404040">${esc(initials(d.person))}</div>
-      <div class="grow"><b>${esc(d.person)}</b><div class="muted">${mine ? t('iOwe') : num(d.owesMe) > 0 ? t('owesMe') : t('settled')}</div></div>
+      return `<div class="tx"><button class="press" data-person-open="${esc(d.person)}" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;background:none;border:0;padding:0;text-align:left"><div class="dot" style="background:#EDEDE8;color:#404040">${esc(initials(d.person))}</div>
+      <div class="grow"><b>${esc(d.person)}</b><div class="muted">${mine ? t('iOwe') : num(d.owesMe) > 0 ? t('owesMe') : t('settled')} · ${t('history')}</div></div></button>
       <div style="text-align:right"><span class="amt ${mine ? 'out' : 'in'}">${rp(mine ? num(d.iOwe) : num(d.owesMe))}</span>
       ${showSettled ? '' : `<div><button class="chip press" style="margin-top:5px;min-height:32px;padding:4px 12px;font-size:12px" data-add="Debt" data-act="${mine ? 'Repay' : 'Collect'}" data-person="${esc(d.person)}" data-amt="${mine ? num(d.iOwe) : num(d.owesMe)}">${mine ? t('pay') : t('receive')}</button></div>`}</div></div>`;
     };
@@ -599,9 +613,10 @@ const VIEWS = {
         <p class="muted" style="margin:6px 0 0;font-size:12px">${t('simple')}</p></section>
       <section class="card"><div class="row"><p class="lab">${t('upcoming')}</p><span class="muted">${t('open')(upcoming.length)}</span></div>
         ${upcoming.length ? upcoming.slice(0, 20).map(p => { const d = pdate(p.date); const inc = /income/i.test(p.type);
-          return `<div class="tx"><div style="width:46px;text-align:center;flex:none"><b style="font-size:19px">${d ? d.getDate() : ''}</b><span class="muted" style="font-size:11px">${d ? t('months')[d.getMonth()] : ''}</span></div>
-          <div class="grow"><b>${esc(p.item)}${p.st !== 'ok' ? `<span class="tag">${t('pending')}</span>` : ''}</b><div class="muted">${esc(p.cat || '')} · ${/month|bulan/i.test(p.repeat) ? t('monthly') : t('once')}</div></div>
-          <span class="amt ${inc ? 'in' : 'out'}">${inc ? '+' : '−'}${grp(p.amt)}</span></div>`; }).join('') : `<p class="empty">${t('noPlans')}</p>`}
+          REG.push(p);
+          return `<button class="tx press" data-plan="${REG.length - 1}"><div style="width:46px;text-align:center;flex:none"><b style="font-size:19px;display:block">${d ? d.getDate() : ''}</b><span class="muted" style="font-size:11px">${d ? t('months')[d.getMonth()] : ''}</span></div>
+          <div class="grow"><b>${esc(p.item)}${p.st === 'pending' ? `<span class="tag">${t('pending')}</span>` : p.st === 'queued' ? `<span class="tag q">${t('queuedTag')}</span>` : ''}</b><div class="muted">${esc(p.cat || '')} · ${/month|bulan/i.test(p.repeat) ? t('monthly') : t('once')}</div></div>
+          <span class="amt ${inc ? 'in' : 'out'}">${inc ? '+' : '−'}${grp(p.amt)}</span></button>`; }).join('') : `<p class="empty">${t('noPlans')}</p>`}
       </section>
     </div>`;
   },
@@ -615,6 +630,15 @@ const VIEWS = {
         ${h.length ? h.map(x => `<div class="tx"><div class="dot" style="background:#FDEBDD;color:#B4521A">${esc(initials(x.ticker))}</div>
           <div class="grow"><b>${esc(x.ticker)}</b><div class="muted">${esc(x.name || x.type || '')}${num(x.units) ? ' · ' + grp(x.units) + ' unit' : ''}</div></div>
           <div style="text-align:right"><span class="amt">${rp(num(x.value))}</span><div class="muted ${num(x.pl) < 0 ? 'out' : 'in'}" style="font-weight:600">${rp(num(x.pl), 1)}</div></div></div>`).join('') : `<p class="empty">—</p>`}
+      </section>
+      <section class="card" style="padding-top:4px"><p class="lab daylab">${t('invHistory')}</p>
+        ${invTx().slice(0, 60).map(o => { const r = o.raw; REG.push({ type: 'Investment', ref: o.ref, st: o.st, raw: r });
+          const u = num(r.SubCategory), tot = r.Category === 'Dividend' || !u ? num(r.Amount) : u * num(r.Amount);
+          const tag = o.st === 'pending' ? `<span class="tag">${t('pending')}</span>` : o.st === 'queued' ? `<span class="tag q">${t('queuedTag')}</span>` : '';
+          return `<button class="tx press" data-open="${REG.length - 1}"><div class="dot" style="background:#FDEBDD;color:#B4521A">${esc(initials(r.Description))}</div>
+          <div class="grow"><b>${esc(actLabel(r.Category))} ${esc(r.Description)}${tag}</b><div class="muted">${esc(fdate(String(r.Date || '')))}${u ? ' · ' + grp(u) + ' unit' : ''}${r.Account ? ' · ' + esc(r.Account) : ''}</div></div>
+          <span class="amt ${r.Category === 'Buy' ? 'out' : 'in'}">${grp(tot)}</span></button>`; }).join('') || `<p class="empty">—</p>`}
+        <p class="muted" style="margin:8px 0 2px;font-size:12px">${t('tapEdit')}</p>
       </section>
     </div>`;
   },
@@ -644,6 +668,8 @@ function bind(root) {
   root.querySelectorAll('[data-back]').forEach(el => el.onclick = () => history.back());
   root.querySelectorAll('[data-sync]').forEach(el => el.onclick = () => { vib(); sync(true); });
   root.querySelectorAll('[data-open]').forEach(el => el.onclick = () => openEdit(REG[+el.dataset.open]));
+  root.querySelectorAll('[data-plan]').forEach(el => el.onclick = () => { const p = REG[+el.dataset.plan]; if (p) openAdd('Plan', { editPlan: p }); });
+  root.querySelectorAll('[data-person-open]').forEach(el => el.onclick = () => openPerson(el.dataset.personOpen));
   root.querySelectorAll('[data-set]').forEach(el => el.onclick = () => openSetting(el.dataset.set, el.dataset.i));
   root.querySelectorAll('[data-add]').forEach(el => el.onclick = () => openAdd(el.dataset.add, { act: el.dataset.act, person: el.dataset.person, amt: el.dataset.amt }));
   root.querySelectorAll('[data-lang]').forEach(el => el.onclick = () => { vib(); lang = el.dataset.lang; LS.set('lang', lang); document.documentElement.lang = lang; rerender(); renderNav(); });
@@ -686,6 +712,12 @@ function openAdd(type, pre = {}) {
       act: pre.edit.type === 'Debt' ? (r.Category || 'Borrow') : 'Borrow', plan: pre.edit.type === 'Expense' ? (r.ToAccount || '') : '', acc2x: '',
       editRef: pre.edit.ref, editSt: pre.edit.st });
     if (pre.edit.type === 'Expense') F.acc2 = '';
+    if (pre.edit.type === 'Investment') Object.assign(F, { ticker: r.Description || '', iact: r.Category || 'Buy', units: r.SubCategory || '', desc: '', cat: '', sub: '' });
+  }
+  if (pre.editPlan) {
+    const p = pre.editPlan;
+    Object.assign(F, { type: 'Plan', amt: p.amt, desc: p.item, date: String(p.date || todayIso()).slice(0, 10), kind: /income/i.test(p.type) ? 'Income' : 'Expense', cat: p.cat || '',
+      repeat: /month/i.test(p.repeat) ? 'Monthly' : 'Once', notes: p.notes || '', editPlan: p });
   }
   drawAdd();
   $('#sheet').classList.add('on'); $('#sheet-backdrop').classList.add('on'); $('#nav').classList.add('hide');
@@ -743,8 +775,8 @@ function drawAdd() {
       ${inp('f-fee', t('fee'), F.fee ? grp(F.fee) : '', 'inputmode="numeric"')}`;
   }
   $('#sheet').innerHTML = `<div class="scroll"><div class="stack">
-    <header class="top" style="margin-bottom:0"><button class="ibtn press" id="f-close" aria-label="${t('back')}">${ic('close', 2.2)}</button><h1 class="h1">${F.editRef ? t('edit') : ty === 'Investment' ? t('invest') : t('add')}</h1><span style="width:44px"></span></header>
-    ${ty === 'Investment' ? '' : `<div class="seg" style="grid-template-columns:repeat(${F.editRef ? 4 : 5},1fr)">${typeBtns}</div>`}
+    <header class="top" style="margin-bottom:0"><button class="ibtn press" id="f-close" aria-label="${t('back')}">${ic('close', 2.2)}</button><h1 class="h1">${F.editRef || F.editPlan ? t('edit') : ty === 'Investment' ? t('invest') : t('add')}</h1><span style="width:44px"></span></header>
+    ${ty === 'Investment' || F.editPlan ? '' : `<div class="seg" style="grid-template-columns:repeat(${F.editRef ? 4 : 5},1fr)">${typeBtns}</div>`}
     <section class="card" style="text-align:center;padding:16px">
       <p class="lab">${ty === 'Investment' ? t('price') : t('amount')}</p>
       <div style="display:flex;align-items:center;justify-content:center;gap:6px"><span class="amount ${amtCls}" style="width:auto;font-size:30px">Rp</span>
@@ -755,8 +787,8 @@ function drawAdd() {
     <p class="err" id="f-err" style="text-align:center"></p>
   </div></div>
   <div class="foot">
-    ${F.editRef ? `<button class="ibtn press" id="f-del" style="width:56px;height:56px;color:var(--out)" aria-label="${t('del')}">${ic('trash')}</button>` : ''}
-    ${ty === 'Expense' && !F.editRef ? `<button class="ibtn press" id="f-photo" style="width:56px;height:56px;${F.photo ? 'background:#E6F2DC;color:#22704A' : ''}" aria-label="${t('photo')}">${ic('cam')}</button><input type="file" id="f-file" accept="image/*" capture="environment" hidden>` : ''}
+    ${F.editRef || F.editPlan ? `<button class="ibtn press" id="f-del" style="width:56px;height:56px;color:var(--out)" aria-label="${t('del')}">${ic('trash')}</button>` : ''}
+    ${ty === 'Expense' && !F.editRef && !F.editPlan ? `<button class="ibtn press" id="f-photo" style="width:56px;height:56px;${F.photo ? 'background:#E6F2DC;color:#22704A' : ''}" aria-label="${t('photo')}">${ic('cam')}</button><input type="file" id="f-file" accept="image/*" capture="environment" hidden>` : ''}
     <button class="btn press" id="f-save">${t('save')}</button>
   </div>`;
   bindAdd();
@@ -797,7 +829,7 @@ function bindAdd() {
   });
   const ph = $('#f-photo'); if (ph) { ph.onclick = () => $('#f-file').click(); $('#f-file').onchange = e => { const f = e.target.files[0]; if (f) shrink(f).then(b64 => { F.photo = b64; readForm(); drawAdd(); toast(t('photoOn')); }); }; }
   $('#f-save').onclick = save;
-  const fd = $('#f-del'); if (fd) fd.onclick = () => openConfirm(t('delQ'), t('del'), () => { deleteEntry(F.editRef, F.editSt); closeAdd(); rerender(); toast(t('deletedT')); });
+  const fd = $('#f-del'); if (fd) fd.onclick = () => openConfirm(t('delQ'), t('del'), () => { if (F.editPlan) deletePlan(F.editPlan); else deleteEntry(F.editRef, F.editSt); closeAdd(); rerender(); toast(t('deletedT')); });
 }
 function shrink(file) {
   return new Promise(res => {
@@ -830,7 +862,11 @@ function save() {
   if (ty === 'Investment') { r.Description = F.ticker; r.Category = F.iact; r.SubCategory = F.iact === 'Dividend' ? '' : F.units; r.Fee = F.fee || ''; r.Party = ''; }
   if (F.photo) { r._photo = F.photo; r.Notes = (r.Notes ? r.Notes + ' · ' : '') + 'foto: Vnancial Sync/Struk/' + ref + '.jpg'; }
   r._at = Date.now();
-  if (F.editRef) {
+  if (F.editPlan) {
+    const p = F.editPlan;
+    if (p.st === 'queued') { const at = queue.findIndex(q => q.Ref === p.ref); r.Ref = p.ref; if (at >= 0) queue[at] = r; else queue.push(r); }
+    else { queue.push(cmdRow('Delete', { Description: p.ref || p.key })); deleted[p.ref || p.key] = Date.now(); LS.set('deleted', deleted); queue.push(r); }
+  } else if (F.editRef) {
     // still on this phone: change it in place; otherwise send an Edit (Excel replaces the row with the same Ref)
     const qi = queue.findIndex(q => q.Ref === ref && !/^(edit:|delete|setting)/i.test(String(q.Type)));
     queue = queue.filter(q => !(q.Ref === ref && /^edit:/i.test(String(q.Type))));
@@ -838,7 +874,7 @@ function save() {
     else { r.Type = 'Edit:' + ty; queue.push(r); }
   } else queue.push(r);
   LS.set('queue', queue);
-  const wasEdit = !!F.editRef;
+  const wasEdit = !!(F.editRef || F.editPlan);
   const b = $('#f-save'); b.textContent = '✓'; b.style.background = '#8FD19E';
   try { navigator.vibrate && navigator.vibrate(18); } catch (x) {}
   setTimeout(() => {
@@ -862,6 +898,21 @@ function deleteEntry(ref, st) {
   else { queue.push(cmdRow('Delete', { Description: ref })); deleted[ref] = Date.now(); LS.set('deleted', deleted); }
   LS.set('queue', queue);
   if (!cfg.demo && navigator.onLine && cfg.url) sync(false);
+}
+function deletePlan(p) {
+  vib();
+  if (p.st === 'queued') queue = queue.filter(q => q.Ref !== p.ref);
+  else { queue.push(cmdRow('Delete', { Description: p.ref || p.key })); deleted[p.ref || p.key] = Date.now(); LS.set('deleted', deleted); }
+  LS.set('queue', queue);
+  if (!cfg.demo && navigator.onLine && cfg.url) sync(false);
+}
+function openPerson(person) {
+  vib();
+  const list = allTx().filter(o => o.type === 'Debt' && String(o.raw.Party || '').toLowerCase() === String(person).toLowerCase());
+  openPanel(`<h2 class="h1" style="font-size:21px;margin:0 2px 4px">${esc(person)}</h2><p class="muted" style="margin:0 2px 8px">${t('tapEdit')}</p>
+    <div>${list.map(txRow).join('') || `<p class="empty">—</p>`}</div>`, m => {
+    m.querySelectorAll('[data-open]').forEach(el => el.onclick = () => { const o = REG[+el.dataset.open]; closeMini(); setTimeout(() => openEdit(o), 200); });
+  });
 }
 function openConfirm(msg, okLabel, cb) {
   openPanel(`<p style="margin:4px 4px 16px;font-size:16px;font-weight:600;line-height:1.4">${esc(msg)}</p>
