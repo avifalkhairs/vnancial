@@ -1,6 +1,6 @@
 /* Vnancial – phone app (PWA). Data: snapshot.json from Excel via Apps Script; new entries go to the Drive inbox. */
 'use strict';
-const APP_VER = '1.2.0';
+const APP_VER = '1.3.0';
 const $ = (s, el = document) => el.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('vn.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -49,7 +49,7 @@ const T = {
     addAcc: '+ Tambah akun', addCat: '+ Tambah kategori', addSub: '+ Tambah sub-kategori', name: 'Nama', type: 'Jenis', opening: 'Saldo awal', bucket: 'Kelompok anggaran', fixed: 'Tagihan tetap?',
     yes: 'Ya', no: 'Tidak', share: 'Porsi', total: 'Total', mustTotal: 'Total harus 100%', savedSet: 'Disimpan · Excel ikut memperbarui',
     renameNote: 'Transaksi lama tetap memakai nama lama.', lastItem: 'Minimal harus ada satu.', exists: 'Nama sudah ada.', needName: 'Isi nama',
-    connection: 'Sambungan ke Excel', emptyAuto: 'kosong = otomatis',
+    connection: 'Sambungan ke Excel', emptyAuto: 'kosong = otomatis', color: 'Warna', hexPh: 'atau kode warna, mis. #F15A23',
     pl_BasisMethod: 'Basis anggaran', pl_BasisManual: 'Jumlah basis manual', pl_OpenDate: 'Tanggal saldo awal', pl_DailyManual: 'Batas harian', pl_EmergMonths: 'Dana darurat (bulan)',
     pl_DebtOn: 'Utang mengubah saldo', pl_FeeCat: 'Kategori biaya transfer', pl_FeeSub: 'Sub-kategori biaya transfer', pl_LocalInbox: 'Folder inbox lokal', pl_CloudInbox: 'Folder inbox Google Drive',
     pl_Owner: 'Pemilik', pl_InvOn: 'Investasi mengubah saldo', pl_SafeMargin: 'Margin aman belanja', pl_SyncFolder: 'Folder sinkron HP',
@@ -95,7 +95,7 @@ const T = {
     addAcc: '+ Add account', addCat: '+ Add category', addSub: '+ Add sub-category', name: 'Name', type: 'Type', opening: 'Opening balance', bucket: 'Budget bucket', fixed: 'Fixed bill?',
     yes: 'Yes', no: 'No', share: 'Share', total: 'Total', mustTotal: 'Total must be 100%', savedSet: 'Saved · Excel will update',
     renameNote: 'Older transactions keep the old name.', lastItem: 'At least one is needed.', exists: 'That name already exists.', needName: 'Enter a name',
-    connection: 'Connection to Excel', emptyAuto: 'empty = automatic',
+    connection: 'Connection to Excel', emptyAuto: 'empty = automatic', color: 'Color', hexPh: 'or a colour code, e.g. #F15A23',
     pl_BasisMethod: 'Budget basis', pl_BasisManual: 'Manual basis amount', pl_OpenDate: 'Opening balance date', pl_DailyManual: 'Daily limit', pl_EmergMonths: 'Emergency fund (months)',
     pl_DebtOn: 'Debt moves balances', pl_FeeCat: 'Transfer fee category', pl_FeeSub: 'Transfer fee sub-category', pl_LocalInbox: 'Local inbox folder', pl_CloudInbox: 'Google Drive inbox folder',
     pl_Owner: 'Owner', pl_InvOn: 'Investments move balances', pl_SafeMargin: 'Safe-spend margin', pl_SyncFolder: 'Phone sync folder',
@@ -200,6 +200,17 @@ async function sync(manual) {
 function setSyncIcon(on) { document.querySelectorAll('[data-sync] svg').forEach(s => s.classList.toggle('spin', on)); }
 
 /* ---------------------------------------------------------------- data model */
+function accHex(name, raw) {  // same rules as Excel: palette name, #RRGGBB, or a colour from the account name
+  raw = String(raw || '').trim();
+  const hx = raw.replace(/^#/, '');
+  if (/^[0-9a-f]{6}$/i.test(hx)) return '#' + hx.toUpperCase();
+  const p = PALETTE.find(x => x[0].toLowerCase() === raw.toLowerCase()); if (p) return p[1];
+  const a = String(name || '').toLowerCase();
+  const rules = [['bca', '#005BAC'], ['bri', '#00529B'], ['bni', '#F15A23'], ['tapcash', '#F15A23'], ['mandiri', '#FFB700'], ['e-money', '#FFB700'], ['emoney', '#FFB700'],
+    ['gojek', '#00AA13'], ['gopay', '#00AA13'], ['dana', '#118EEA'], ['shopee', '#EE4D2D'], ['ovo', '#4C3494'], ['cash', '#2E7D32'], ['tunai', '#2E7D32']];
+  const m = rules.find(([k]) => a.includes(k)); return m ? m[1] : '#6B6B6B';
+}
+function inkOn(hex) { const n = parseInt(String(hex).slice(1), 16); const l = 0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255); return l > 150 ? '#262626' : '#FFFFFF'; }
 let setOv = LS.get('setOv', null);              // settings saved on the phone, until Excel sends them back
 let deleted = LS.get('deleted', {});            // ref -> entry deleted on the phone, until Excel removed it
 function S() {
@@ -211,7 +222,7 @@ function S() {
   const o = Object.assign({}, base), d = setOv.data;
   o.prefs = Object.assign({}, base.prefs || {}, d.prefs);
   const bal = {}; (base.accounts || []).forEach(a => bal[a.name] = num(a.balance));
-  o.accounts = d.accounts.map(a => ({ name: a.name, type: a.type, opening: a.opening, balance: a.name in bal ? bal[a.name] : num(a.opening) }));
+  o.accounts = d.accounts.map(a => ({ name: a.name, type: a.type, opening: a.opening, colorName: a.colorName || '', color: accHex(a.name, a.colorName), balance: a.name in bal ? bal[a.name] : num(a.opening) }));
   o.buckets = (base.buckets || []).map((b, i) => Object.assign({}, b, d.buckets[i] ? { name: d.buckets[i].name, share: d.buckets[i].share } : {}));
   o.lists = { subcats: d.subs.map(x => ({ cat: x.cat, sub: x.sub, bucket: x.bucket, fixed: x.fixed })),
               expenseCats: d.expCats.map(c => ({ cat: c })), incomeCats: d.incCats.map(c => ({ cat: c })) };
@@ -287,7 +298,7 @@ function effect(o) { // per-account change
   return d;
 }
 function accounts() {
-  const s = S(); const list = (s && s.accounts || []).map(a => ({ name: a.name, type: a.type || '', balance: num(a.balance) }));
+  const s = S(); const list = (s && s.accounts || []).map(a => ({ name: a.name, type: a.type || '', balance: num(a.balance), color: a.color || accHex(a.name, a.colorName) }));
   unseen().forEach(o => { const e = effect(o); Object.keys(e).forEach(k => { const a = list.find(x => x.name === k); if (a) a.balance += e[k]; }); });
   return list;
 }
@@ -488,9 +499,7 @@ const VIEWS = {
     const acc = accounts(); const k = kpi();
     const groups = [['Bank', t('bank')], ['E-Wallet', t('ewallet')], ['Cash', t('cash')]];
     const other = acc.filter(a => !groups.some(g => g[0].toLowerCase() === a.type.toLowerCase()));
-    const colors = ['#1D63B8', '#E07B1A', '#2E8B57', '#2C8FD8', '#EE4D2D', '#5B3BA6', '#3E7D3A', '#7A4FB5'];
-    let ci = 0;
-    const row = a => `<div class="tx"><div class="dot" style="background:${colors[ci++ % colors.length]};color:#fff">${esc(initials(a.name))}</div><div class="grow"><b>${esc(a.name)}</b></div><span class="amt ${a.balance < 0 ? 'out' : ''}">${rp(a.balance)}</span></div>`;
+    const row = a => `<div class="tx"><div class="dot" style="background:${a.color};color:${inkOn(a.color)}">${esc(initials(a.name))}</div><div class="grow"><b>${esc(a.name)}</b></div><span class="amt ${a.balance < 0 ? 'out' : ''}">${rp(a.balance)}</span></div>`;
     const sec = (lab, arr) => arr.length ? `<p class="lab daylab">${lab}</p>${arr.map(row).join('')}` : '';
     const total = acc.reduce((s, a) => s + a.balance, 0);
     return `${head(t('wallet'), { right: `<button class="ibtn press" data-add="Transfer" aria-label="${t('transfer')}">${ic('swap')}</button>` })}
@@ -875,11 +884,14 @@ const PREFS = [['BasisMethod', 'select', ['Last Month', 'Average 3 Months', 'Thi
   ['EmergMonths', 'num'], ['DebtOn', 'yesno'], ['InvOn', 'yesno'], ['SafeMargin', 'pct'], ['FeeCat', 'expcat'], ['FeeSub', 'feesub'], ['Owner', 'text'],
   ['LocalInbox', 'text'], ['CloudInbox', 'text'], ['SyncFolder', 'text']];
 const ACC_TYPES = ['Cash', 'Bank', 'E-Wallet', 'Other'];
+const PALETTE = [['BCA Blue', '#005BAC'], ['BRI Blue', '#00529B'], ['BNI Orange', '#F15A23'], ['Mandiri Yellow', '#FFB700'], ['Mandiri Navy', '#003D79'],
+  ['GoPay Green', '#00AA13'], ['DANA Blue', '#118EEA'], ['Shopee Orange', '#EE4D2D'], ['OVO Purple', '#4C3494'], ['Cash Green', '#2E7D32'],
+  ['Red', '#C0392B'], ['Teal', '#00897B'], ['Gray', '#6B6B6B'], ['Black', '#262626']];
 function curSettings() {
   const s = S() || {}; const l = s.lists || {};
   return {
     prefs: Object.assign({}, s.prefs || {}),
-    accounts: (s.accounts || []).filter(a => a.name).map(a => ({ name: a.name, type: a.type || 'Other', opening: num(a.opening) })),
+    accounts: (s.accounts || []).filter(a => a.name).map(a => ({ name: a.name, type: a.type || 'Other', opening: num(a.opening), colorName: a.colorName || '' })),
     buckets: (s.buckets || []).filter(b => b.name).map(b => ({ name: b.name, share: num(b.share) })),
     subs: (l.subcats || []).filter(x => x.cat && x.sub).map(x => ({ cat: x.cat, sub: x.sub, bucket: x.bucket || '', fixed: x.fixed || 'No' })),
     expCats: (l.expenseCats || []).map(x => x.cat).filter(Boolean),
@@ -901,7 +913,7 @@ function commitSettings(d, sections) {
   sections.forEach(sec => {
     if (sec === 'pref') Object.keys(d._prefChanged || {}).forEach(k => rows.push(cmdRow('Setting', { Description: 'pref', Category: k, SubCategory: d.prefs[k] == null ? '' : String(d.prefs[k]) })));
     if (sec === 'bucket') d.buckets.forEach((b, i) => rows.push(cmdRow('Setting', { Description: 'bucket', Party: String(i + 1), SubCategory: String(b.share) })));
-    if (sec === 'account') d.accounts.forEach((a, i) => rows.push(cmdRow('Setting', { Description: 'account', Party: String(i + 1), Category: a.name, SubCategory: a.type, Account: String(a.opening || 0) })));
+    if (sec === 'account') d.accounts.forEach((a, i) => rows.push(cmdRow('Setting', { Description: 'account', Party: String(i + 1), Category: a.name, SubCategory: a.type, Account: String(a.opening || 0), ToAccount: a.colorName || '' })));
     if (sec === 'expcat') d.expCats.forEach((c, i) => rows.push(cmdRow('Setting', { Description: 'expcat', Party: String(i + 1), Category: c })));
     if (sec === 'inccat') d.incCats.forEach((c, i) => rows.push(cmdRow('Setting', { Description: 'inccat', Party: String(i + 1), Category: c })));
     if (sec === 'sub') {
@@ -922,6 +934,12 @@ function commitSettings(d, sections) {
 function openForm(title, fields, onSave, onDelete, note) {
   const f = fields.map((x, i) => {
     const id = 'pf' + i;
+    if (x.type === 'color') {
+      const cur = String(x.value || ''); const isHex = /^#?[0-9a-f]{6}$/i.test(cur);
+      return `<div class="field"><span class="lab">${esc(x.label)}</span><div class="chips" data-chips="${id}" data-color="1">${PALETTE.map(([n, h]) =>
+        `<button class="chip press swatch ${cur.toLowerCase() === n.toLowerCase() ? 'on' : ''}" data-v="${esc(n)}" aria-label="${esc(n)}" title="${esc(n)}" style="background:${h};border-color:${h}"></button>`).join('')}</div>
+        <input class="input" id="${id}-hex" placeholder="${t('hexPh')}" autocomplete="off" value="${isHex ? esc(cur.startsWith('#') ? cur : '#' + cur) : ''}" style="margin-top:6px"></div>`;
+    }
     if (x.type === 'select' || x.type === 'yesno') {
       const opts = x.type === 'yesno' ? [['Yes', t('yes')], ['No', t('no')]] : x.options.map(o => Array.isArray(o) ? o : [o, o]);
       return `<div class="field"><span class="lab">${esc(x.label)}</span><div class="chips" data-chips="${id}">${opts.map(([v, l]) => `<button class="chip press ${String(x.value) === String(v) ? 'on' : ''}" data-v="${esc(v)}">${esc(l)}</button>`).join('')}</div></div>`;
@@ -934,11 +952,12 @@ function openForm(title, fields, onSave, onDelete, note) {
     ${note ? `<p class="muted" style="margin:0">${esc(note)}</p>` : ''}<p class="err" id="pf-err"></p>
     <div style="display:flex;gap:10px">${onDelete ? `<button class="ibtn press" id="pf-del" style="width:56px;height:56px;background:#FCE4DE;color:var(--out)" aria-label="${t('del')}">${ic('trash')}</button>` : ''}
     <button class="btn press" id="pf-save">${t('save')}</button></div></div>`, m => {
-    m.querySelectorAll('[data-chips]').forEach(g => g.querySelectorAll('.chip').forEach(b => b.onclick = () => { vib(); g.querySelectorAll('.chip').forEach(c => c.classList.remove('on')); b.classList.add('on'); }));
+    m.querySelectorAll('[data-chips]').forEach(g => g.querySelectorAll('.chip').forEach(b => b.onclick = () => { vib(); g.querySelectorAll('.chip').forEach(c => c.classList.remove('on')); b.classList.add('on'); if (g.dataset.color) { const hx = $('#' + g.dataset.chips + '-hex', m); if (hx) hx.value = ''; } }));
     m.querySelectorAll('input[inputmode="numeric"]').forEach(inp => inp.oninput = () => { const dg = inp.value.replace(/\D/g, ''); inp.value = dg ? grp(num(dg)) : ''; });
     $('#pf-save', m).onclick = () => {
       const vals = fields.map((x, i) => {
         const id = 'pf' + i;
+        if (x.type === 'color') { const hx = $('#' + id + '-hex', m).value.trim().replace(/^#/, ''); if (/^[0-9a-f]{6}$/i.test(hx)) return '#' + hx.toUpperCase(); const on = m.querySelector(`[data-chips="${id}"] .chip.on`); return on ? on.dataset.v : ''; }
         if (x.type === 'select' || x.type === 'yesno') { const on = m.querySelector(`[data-chips="${id}"] .chip.on`); return on ? on.dataset.v : ''; }
         const v = $('#' + id, m).value.trim();
         if (x.type === 'num') return v === '' ? '' : num(v.replace(/\D/g, ''));
@@ -969,12 +988,12 @@ function openSetting(kind, i) {
     openForm(b.name, [{ label: t('share'), type: 'pct', value: b.share }], ([v]) => { b.share = num(v); commitSettings(d, ['bucket']); },
       null, `${t('total')}: ${Math.round(d.buckets.reduce((a, x, j) => a + (j === i ? 0 : x.share), 0) * 100)}% + ${b.name}`);
   } else if (kind === 'account') {
-    const a = i >= 0 ? d.accounts[i] : { name: '', type: 'Bank', opening: 0 };
+    const a = i >= 0 ? d.accounts[i] : { name: '', type: 'Bank', opening: 0, colorName: '' };
     openForm(i >= 0 ? a.name : t('addAcc').replace('+ ', ''), [{ label: t('name'), type: 'text', value: a.name }, { label: t('type'), type: 'select', value: a.type, options: ACC_TYPES.map(x => [x, x === 'Cash' ? t('cash') : x === 'Bank' ? t('bank') : x === 'E-Wallet' ? t('ewallet') : t('other')]) },
-      { label: t('opening'), type: 'num', value: a.opening }], ([n, ty, op]) => {
+      { label: t('opening'), type: 'num', value: a.opening }, { label: t('color'), type: 'color', value: a.colorName }], ([n, ty, op, col]) => {
         if (!n) return t('needName');
         if (d.accounts.some((x, j) => j !== i && x.name.toLowerCase() === n.toLowerCase())) return t('exists');
-        const nv = { name: n, type: ty || 'Other', opening: num(op) };
+        const nv = { name: n, type: ty || 'Other', opening: num(op), colorName: col || '' };
         if (i >= 0) d.accounts[i] = nv; else d.accounts.push(nv);
         commitSettings(d, ['account']);
       }, i >= 0 ? () => { if (d.accounts.length <= 1) return t('lastItem'); d.accounts.splice(i, 1); commitSettings(d, ['account']); } : null, i >= 0 ? t('renameNote') : '');
@@ -1004,8 +1023,8 @@ function openSetting(kind, i) {
 }
 VIEWS.settings = function () {
   const d = curSettings();
-  const row = (kind, i, title, sub, right) => `<button class="tx press" data-set="${kind}" ${i !== undefined ? `data-i="${i}"` : ''} style="min-height:52px">
-    <div class="grow"><b>${esc(title)}</b>${sub ? `<div class="muted">${esc(sub)}</div>` : ''}</div>${right ? `<span class="amt" style="font-size:15px">${esc(right)}</span>` : ''}<span style="width:18px;color:#8A8A8A;flex:none">${ic('chev')}</span></button>`;
+  const row = (kind, i, title, sub, right, dot) => `<button class="tx press" data-set="${kind}" ${i !== undefined ? `data-i="${i}"` : ''} style="min-height:52px">
+    ${dot ? `<span class="dot" style="width:28px;height:28px;border-radius:9px;background:${dot}"></span>` : ''}<div class="grow"><b>${esc(title)}</b>${sub ? `<div class="muted">${esc(sub)}</div>` : ''}</div>${right ? `<span class="amt" style="font-size:15px">${esc(right)}</span>` : ''}<span style="width:18px;color:#8A8A8A;flex:none">${ic('chev')}</span></button>`;
   const addBtn = (kind, label) => `<button class="link press" data-set="${kind}" style="padding:12px 0 4px;color:var(--orange)">${label}</button>`;
   const tot = Math.round(d.buckets.reduce((a, b) => a + b.share, 0) * 100);
   const subsBy = d.expCats.map(c => [c, d.subs.map((x, i) => [x, i]).filter(([x]) => x.cat === c)]).filter(([, a]) => a.length);
@@ -1017,7 +1036,7 @@ VIEWS.settings = function () {
     <section class="card" style="padding-top:4px"><p class="lab daylab">${t('prefs')}</p>${PREFS.map(([k, type], i) => row('pref', i, t('pl_' + k), '', fmtPref(k, d.prefs[k], type === 'expcat' || type === 'feesub' ? 'text' : type))).join('')}</section>
     <section class="card" style="padding-top:4px"><div class="row"><p class="lab daylab">${t('alloc')}</p><span class="${tot === 100 ? 'c-ok' : 'c-bad'}" style="font-size:12px;font-weight:700;padding-top:12px">${t('total')} ${tot}%${tot === 100 ? '' : ' · ' + t('mustTotal')}</span></div>
       ${d.buckets.map((b, i) => row('bucket', i, b.name, '', Math.round(b.share * 100) + '%')).join('')}</section>
-    <section class="card" style="padding-top:4px"><p class="lab daylab">${t('accountsT')}</p>${d.accounts.map((a, i) => row('account', i, a.name, `${a.type} · ${t('opening').toLowerCase()} ${rp(a.opening)}`)).join('')}${addBtn('account', t('addAcc'))}</section>
+    <section class="card" style="padding-top:4px"><p class="lab daylab">${t('accountsT')}</p>${d.accounts.map((a, i) => row('account', i, a.name, `${a.type} · ${t('opening').toLowerCase()} ${rp(a.opening)}`, '', accHex(a.name, a.colorName))).join('')}${addBtn('account', t('addAcc'))}</section>
     <section class="card" style="padding-top:4px"><p class="lab daylab">${t('expCats')}</p>${d.expCats.map((c, i) => row('expcat', i, c)).join('')}${addBtn('expcat', t('addCat'))}</section>
     <section class="card" style="padding-top:4px"><p class="lab daylab">${t('incCats')}</p>${d.incCats.map((c, i) => row('inccat', i, c)).join('')}${addBtn('inccat', t('addCat'))}</section>
     <section class="card" style="padding-top:4px"><p class="lab daylab">${t('subcats')}</p>

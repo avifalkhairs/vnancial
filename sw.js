@@ -1,5 +1,5 @@
 /* Vnancial service worker: app files come from the network first (updates show at once), cache only when offline. */
-const CACHE = 'vnancial-v1.2.0';
+const CACHE = 'vnancial-v1.3.0';
 const SHELL = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icons/logo.png', 'icons/splash-192.png', 'icons/splash-512.png', 'icons/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
