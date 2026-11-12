@@ -1,6 +1,6 @@
 /* Vnancial – phone app (PWA). Data: snapshot.json from Excel via Apps Script; new entries go to the Drive inbox. */
 'use strict';
-const APP_VER = '1.8.0';
+const APP_VER = '1.9.0';
 const $ = (s, el = document) => el.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('vn.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -11,7 +11,7 @@ const LS = {
 const T = {
   id: {
     home: 'Beranda', tx: 'Transaksi', wallet: 'Dompet', more: 'Lainnya', add: 'Tambah', save: 'SIMPAN',
-    totalBalance: 'Total saldo', incMonth: 'Pemasukan bln ini', expMonth: 'Pengeluaran',
+    totalBalance: 'Total saldo', todayT: 'Hari ini', incToday: 'Pemasukan', expToday: 'Pengeluaran', vsYest: 'dari kemarin', sameYest: 'sama dengan kemarin', spendCal: 'Kalender pengeluaran', calNo: 'Tanpa belanja', calSafe: 'Aman', calMargin: 'Margin', calOver: 'Lebih', calSpent: 'Belanja tak terencana', calLimit: l => `pembanding: batas ${l}/hari`, guide: 'Panduan', guideSub: 'Panduan lengkap penggunaan Vnancial di HP dan Excel.', incMonth: 'Pemasukan bln ini', expMonth: 'Pengeluaran',
     safeToday: 'Aman dibelanjakan hari ini', safe: 'Aman', careful: 'Hati-hati', over: 'Lewat batas',
     usedOf: (a, b) => `Terpakai ${a} dari batas ${b}`, budget: 'Anggaran', detail: 'Detail', latest: 'Terakhir', all: 'Semua',
     expense: 'Keluar', income: 'Masuk', transfer: 'Transfer', debt: 'Utang', plan: 'Rencana', investment: 'Investasi',
@@ -57,7 +57,7 @@ const T = {
   },
   en: {
     home: 'Home', tx: 'Activity', wallet: 'Wallet', more: 'More', add: 'Add', save: 'SAVE',
-    totalBalance: 'Total balance', incMonth: 'Income this month', expMonth: 'Spending',
+    totalBalance: 'Total balance', todayT: 'Today', incToday: 'Income', expToday: 'Spending', vsYest: 'vs yesterday', sameYest: 'same as yesterday', spendCal: 'Spending calendar', calNo: 'No spend', calSafe: 'Safe', calMargin: 'Margin', calOver: 'Over', calSpent: 'Unplanned spending', calLimit: l => `compared with ${l}/day`, guide: 'Guide', guideSub: 'The complete guide to Vnancial on phone and Excel.', incMonth: 'Income this month', expMonth: 'Spending',
     safeToday: 'Safe to spend today', safe: 'Safe', careful: 'Careful', over: 'Over limit',
     usedOf: (a, b) => `Used ${a} of ${b}`, budget: 'Budget', detail: 'Details', latest: 'Latest', all: 'All',
     expense: 'Expense', income: 'Income', transfer: 'Transfer', debt: 'Debt', plan: 'Plan', investment: 'Investment',
@@ -118,7 +118,13 @@ const I = {
   swap: '<path d="M4 8h14l-3-3M20 16H6l3 3"/>', search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   left: '<path d="M15 6l-6 6 6 6"/>', right: '<path d="M9 6l6 6-6 6"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
-  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>'
+  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+  rocket: '<path d="M5 15c-1.5 1.5-2 4-2 6 2 0 4.5-.5 6-2M9 15l-3-3c1-4 5-9 13-9 0 8-5 12-9 13z"/><circle cx="15" cy="9" r="1.5"/>',
+  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>',
+  star: '<path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>'
 };
 const ic = (n, sw = 2) => `<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${I[n]}</svg>`;
 
@@ -517,6 +523,134 @@ const banner = () => {
   return '';
 };
 
+/* ---------------------------------------------------------------- guide (in-app manual) */
+const GUIDE = {
+  id: [
+    ['Memulai', 'rocket', `<p>Vnancial terdiri atas dua bagian yang saling terhubung: <b>workbook Excel</b> di laptop sebagai pusat perhitungan, dan <b>aplikasi HP</b> ini untuk mencatat dan memantau di mana saja.</p>
+      <ol><li>Buka <b>Lainnya → Pengaturan → Koneksi</b>, isi URL Web App dan token, lalu ketuk <b>Uji</b>.</li>
+      <li>Ketuk ⟳ di Beranda untuk mengambil data terbaru dari Excel.</li>
+      <li>Catat transaksi dengan tombol <b>+</b> di tengah bilah bawah.</li></ol>
+      <p class="gnote">Token bersifat rahasia. Jangan dibagikan kepada siapa pun.</p>`],
+    ['Beranda', 'home', `<ul><li><b>Total saldo</b>: jumlah saldo seluruh akun kas (bank, e-wallet, tunai). Ketuk untuk membuka Dompet.</li>
+      <li><b>Pemasukan bln ini</b> dan <b>Pengeluaran</b>: total bulan berjalan.</li>
+      <li><b>Hari ini</b>: pemasukan dan pengeluaran hari ini beserta perbandingannya dengan kemarin. Panah merah pada pengeluaran berarti lebih boros daripada kemarin; panah hijau berarti lebih hemat.</li>
+      <li><b>Aman dibelanjakan hari ini</b>: batas belanja harian (lihat bagian berikutnya).</li>
+      <li><b>Kalender pengeluaran</b>: warna tiap hari dalam bulan berjalan; ketuk untuk melihat detail.</li></ul>`],
+    ['Aman dibelanjakan hari ini', 'shield', `<p>Batas belanja harian untuk pengeluaran <b>tidak terencana</b>. Pengeluaran sub-kategori bertanda <i>Fixed</i>, bucket <i>Savings</i>, dan realisasi rencana tidak mengurangi batas ini.</p>
+      <p><b>Dua dasar perhitungan</b> (Pengaturan → Dasar aman belanja):</p>
+      <ul><li><b>Anggaran</b>: sisa anggaran bulan ini (Needs + Family + Wants) dikurangi rencana bulan ini, dibagi sisa hari. Cocok bila ada penghasilan bulanan tetap.</li>
+      <li><b>Saldo kas</b>: total saldo kas dikurangi rencana, dibagi jumlah hari. Cocok bila penghasilan tidak tetap.</li></ul>
+      <p><b>Horizon</b> (khusus Saldo kas): saldo dibagi rata sampai <i>N hari setelah rencana terakhir</i> atau sampai <i>tanggal tertentu</i>. Semua rencana pengeluaran sampai batas itu dipotong penuh; rencana pemasukan hanya dihitung 50%.</p>
+      <p>Tanpa horizon, rencana di luar bulan ini dicicil per hari sampai tanggalnya.</p>
+      <p><b>Margin</b> (mis. 80%) menyisakan cadangan dari batas yang dihitung.</p>
+      <p class="gnote">Batas ini adalah plafon, bukan target. Angkanya dihitung ulang setiap hari dari kondisi terbaru.</p>`],
+    ['Kalender pengeluaran', 'cal', `<p>Setiap hari diberi warna sesuai pengeluaran tidak terencana pada hari itu dibandingkan batas harian saat ini:</p>
+      <ul><li><span class="gsw" style="background:#EDEDE8"></span> Tidak ada pengeluaran</li>
+      <li><span class="gsw" style="background:#CFE8D6"></span> Aman (≤ batas)</li>
+      <li><span class="gsw" style="background:#FBE7B0"></span> Margin (melewati batas, masih dalam cadangan)</li>
+      <li><span class="gsw" style="background:#F6C9C3"></span> Melebihi</li></ul>
+      <p>Ketuk satu tanggal untuk melihat transaksinya. Gunakan panah untuk berpindah bulan.</p>
+      <p class="gnote">Pembanding memakai batas harian saat ini, sehingga warna hari-hari lampau bersifat indikatif.</p>`],
+    ['Mencatat transaksi', 'plus', `<ul><li><b>Pengeluaran / Pemasukan</b>: isi nominal, kategori, sub-kategori, akun, dan keterangan.</li>
+      <li><b>Transfer</b>: pindah dana antar-akun; biaya admin diisi pada kolom <i>Fee</i> dan tercatat otomatis sebagai pengeluaran.</li>
+      <li><b>Utang</b>: <i>Pinjam</i> (saya berutang), <i>Bayar</i> (melunasi), <i>Pinjamkan</i> (orang berutang ke saya), <i>Terima</i> (piutang dibayar).</li>
+      <li><b>Rencana</b>: pengeluaran atau pemasukan yang akan datang, sekali atau bulanan.</li>
+      <li><b>Investasi</b>: beli, jual, atau dividen dengan ticker, harga, dan unit.</li></ul>
+      <p class="gnote">Contoh reimburse kantor: catat sebagai Utang → <i>Pinjamkan</i> ke "Kantor", lalu <i>Terima</i> saat diganti.</p>`],
+    ['Mengubah dan menghapus', 'edit', `<ul><li>Ketuk transaksi di daftar untuk membuka, mengubah, atau menghapusnya (ikon tempat sampah).</li>
+      <li><b>Utang</b>: ketuk nama orang untuk melihat seluruh riwayatnya.</li>
+      <li><b>Rencana</b> dan <b>Investasi</b>: ketuk barisnya di halaman masing-masing.</li></ul>
+      <p class="gnote">Baris yang diketik langsung di Excel tanpa kode Ref tidak dapat diubah dari HP, kecuali rencana.</p>`],
+    ['Rencana, Utang, Investasi, Anggaran', 'list', `<ul><li><b>Rencana</b>: daftar "Akan datang"; status Open memengaruhi batas harian.</li>
+      <li><b>Utang</b>: ringkasan "Saya berutang" dan "Berutang ke saya", tombol Bayar/Terima cepat.</li>
+      <li><b>Investasi</b>: posisi, nilai pasar, untung/rugi, dan riwayat transaksi.</li>
+      <li><b>Anggaran</b>: realisasi tiap bucket terhadap targetnya.</li></ul>`],
+    ['Dompet dan akun', 'wallet', `<p>Dompet menampilkan saldo per akun, dikelompokkan Bank, E-Wallet, dan Tunai. Warna akun diatur di <b>Pengaturan → Akun</b> (pilih dari palet atau isi kode #hex). Akun baru otomatis muncul di Excel dan HP.</p>`],
+    ['Pengaturan', 'gear', `<p>Semua pengaturan Excel dapat diubah dari HP: preferensi, bucket anggaran, akun, kategori, sub-kategori, serta bahasa. Perubahan diterapkan ke Excel dalam ±1 menit saat Excel terbuka.</p>`],
+    ['Sinkronisasi dengan Excel', 'sync', `<ul><li>Entri dari HP dikirim ke folder Inbox Google Drive. Label <b>Menunggu</b> berarti sudah terkirim tetapi belum dibaca Excel; <b>Belum terkirim</b> berarti HP sedang offline dan akan dikirim otomatis.</li>
+      <li>Excel yang terbuka membaca Inbox setiap ±15 detik lalu memperbarui snapshot untuk HP.</li>
+      <li>Saat Excel tidak dibuka, HP menghitung saldo dan batas harian sendiri dari catatan di HP. Banner kuning menandai angka perkiraan.</li>
+      <li>Bila bulan sudah berganti dalam mode Anggaran, buka Excel sekali agar perhitungan bulan baru tersedia.</li></ul>`],
+    ['Tips', 'star', `<ol><li>Catat segera setelah bertransaksi.</li><li>Masukkan semua pengeluaran besar yang sudah pasti ke Rencana.</li>
+      <li>Lihat batas harian <b>sebelum</b> membeli, bukan sesudahnya.</li><li>Buka Excel sesekali agar semua angka diselaraskan penuh.</li></ol>`]
+  ],
+  en: [
+    ['Getting started', 'rocket', `<p>Vnancial has two connected parts: the <b>Excel workbook</b> on your laptop, which does the calculations, and this <b>phone app</b> for recording and checking on the go.</p>
+      <ol><li>Open <b>More → Settings → Connection</b>, enter the Web App URL and token, then tap <b>Test</b>.</li>
+      <li>Tap ⟳ on Home to fetch the latest Excel data.</li><li>Record entries with the <b>+</b> button in the bottom bar.</li></ol>
+      <p class="gnote">The token is secret. Do not share it.</p>`],
+    ['Home', 'home', `<ul><li><b>Total balance</b>: sum of all cash accounts. Tap to open Wallet.</li><li><b>Income this month</b> and <b>Spending</b>: month-to-date totals.</li>
+      <li><b>Today</b>: today's income and spending compared with yesterday. A red arrow on spending means more than yesterday; green means less.</li>
+      <li><b>Safe to spend today</b>: your daily limit (see next section).</li><li><b>Spending calendar</b>: colour per day this month; tap for details.</li></ul>`],
+    ['Safe to spend today', 'shield', `<p>The daily limit for <b>unplanned</b> spending. Fixed sub-categories, the Savings bucket and plan realisations do not reduce it.</p>
+      <ul><li><b>Budget</b>: remaining budget minus this month's plans, divided by days left. Suits a fixed monthly income.</li>
+      <li><b>Cash balance</b>: total cash minus plans, divided by days. Suits irregular income.</li></ul>
+      <p><b>Horizon</b> (Cash balance only): spread the balance until <i>N days after the last plan</i> or a <i>fixed date</i>. Planned expenses up to then are deducted in full; planned income counts 50%.</p>
+      <p>Without a horizon, plans beyond this month are spread per day until their date. <b>Margin</b> (e.g. 80%) keeps a buffer.</p>
+      <p class="gnote">The limit is a ceiling, not a target. It is recalculated every day.</p>`],
+    ['Spending calendar', 'cal', `<ul><li><span class="gsw" style="background:#EDEDE8"></span> No spending</li><li><span class="gsw" style="background:#CFE8D6"></span> Safe (≤ limit)</li>
+      <li><span class="gsw" style="background:#FBE7B0"></span> Margin (over the limit, within the buffer)</li><li><span class="gsw" style="background:#F6C9C3"></span> Over</li></ul>
+      <p>Tap a date to see its entries; use the arrows to change month.</p><p class="gnote">Past days are compared with today's limit, so their colours are indicative.</p>`],
+    ['Recording entries', 'plus', `<ul><li><b>Expense / Income</b>: amount, category, sub-category, account, description.</li><li><b>Transfer</b>: between accounts; the <i>Fee</i> is recorded as an expense.</li>
+      <li><b>Debt</b>: <i>Borrow</i>, <i>Repay</i>, <i>Lend</i>, <i>Collect</i>.</li><li><b>Plan</b>: an upcoming expense or income, once or monthly.</li><li><b>Investment</b>: buy, sell or dividend.</li></ul>
+      <p class="gnote">Office reimbursement: record Debt → <i>Lend</i> to "Office", then <i>Collect</i> when repaid.</p>`],
+    ['Editing and deleting', 'edit', `<ul><li>Tap an entry to edit or delete it (bin icon).</li><li><b>Debts</b>: tap a person to see their history.</li><li><b>Plans</b> and <b>Investments</b>: tap the row on their page.</li></ul>
+      <p class="gnote">Rows typed directly in Excel without a Ref cannot be edited from the phone, except plans.</p>`],
+    ['Plans, Debts, Investments, Budget', 'list', `<ul><li><b>Plans</b>: upcoming items; Open plans affect the daily limit.</li><li><b>Debts</b>: what you owe and are owed, with quick Pay/Receive.</li>
+      <li><b>Investments</b>: holdings, market value, P/L and history.</li><li><b>Budget</b>: actual vs target per bucket.</li></ul>`],
+    ['Wallet and accounts', 'wallet', `<p>Balances per account, grouped Bank, E-Wallet and Cash. Set account colours in <b>Settings → Accounts</b> (palette or #hex). New accounts appear in Excel and on the phone automatically.</p>`],
+    ['Settings', 'gear', `<p>Every Excel setting can be changed here: preferences, buckets, accounts, categories, sub-categories and language. Changes reach Excel within about a minute while it is open.</p>`],
+    ['Syncing with Excel', 'sync', `<ul><li>Phone entries go to the Google Drive Inbox. <b>Waiting</b> = sent, not read by Excel yet; <b>Not sent</b> = offline, sent automatically later.</li>
+      <li>An open Excel reads the Inbox about every 15 seconds and refreshes the phone snapshot.</li>
+      <li>When Excel is closed, the phone estimates balances and the daily limit itself; a yellow banner marks estimates.</li>
+      <li>After a month change in Budget mode, open Excel once.</li></ul>`],
+    ['Tips', 'star', `<ol><li>Record right after each transaction.</li><li>Put every known large expense into Plans.</li><li>Check the limit <b>before</b> buying.</li><li>Open Excel now and then for a full reconciliation.</li></ol>`]
+  ]
+};
+
+/* ---------------------------------------------------------------- day totals & spending calendar */
+function dayTotals(d) {
+  let inc = 0, exp = 0;
+  allTx().forEach(o => { if (o.date !== d) return; if (o.type === 'Income') inc += o.amt; else if (o.type === 'Expense') exp += o.amt; else if (o.type === 'Transfer' && o.fee) exp += o.fee; });
+  return { inc, exp };
+}
+function unplannedByDay(month) {
+  const s = S() || {}; const subs = ((s.lists || {}).subcats || []);
+  const info = (c, x) => subs.find(y => y.cat === c && y.sub === x) || {};
+  const out = {};
+  allTx().forEach(o => {
+    if (o.type !== 'Expense' || (o.date || '').slice(0, 7) !== month) return;
+    const r = o.raw || {}, si = info(r.Category, r.SubCategory);
+    if (String(si.fixed || '').toLowerCase() === 'yes' || si.bucket === 'Savings' || String(r.ToAccount || '').trim()) return;
+    out[o.date] = (out[o.date] || 0) + o.amt;
+  });
+  return out;
+}
+function calGrid(month, opts = {}) {
+  const [y, m] = month.split('-').map(Number), k = kpi(), s = S() || {};
+  const safe = Math.max(0, num(k.AllowSafe)), mg = num((s.prefs || {}).SafeMargin) || 0.8, allow = safe / mg;
+  const by = unplannedByDay(month), td = todayIso(), first = new Date(y, m - 1, 1), n = new Date(y, m, 0).getDate();
+  const lead = (first.getDay() + 6) % 7;
+  const wd = lang === 'id' ? ['Sn', 'Sl', 'Rb', 'Km', 'Jm', 'Sb', 'Mg'] : ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+  let h = wd.map(w => `<span class="cwd">${w}</span>`).join('') + '<span></span>'.repeat(lead);
+  for (let d = 1; d <= n; d++) {
+    const ds = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`, v = by[ds] || 0, fut = ds > td;
+    const c = fut ? 'fut' : v <= 0 ? 'no' : v <= safe ? 'ok' : v <= allow ? 'mg' : 'ov';
+    h += `<button class="cday k-${c}${ds === td ? ' today' : ''}${opts.sel === ds ? ' sel' : ''} press" data-cal-d="${ds}"><b>${d}</b>${v > 0 && !opts.mini ? `<i>${shortC(v)}</i>` : ''}</button>`;
+  }
+  const cnt = c => Object.keys(by).filter(ds => ds <= td).filter(ds => { const v = by[ds]; return c === 'ok' ? v <= safe : c === 'mg' ? v > safe && v <= allow : v > allow; }).length;
+  const days = Math.min(n, month === td.slice(0, 7) ? +td.slice(8) : month < td.slice(0, 7) ? n : 0);
+  const legend = `<div class="clg"><span><i class="k-no"></i>${t('calNo')} ${Math.max(0, days - Object.keys(by).filter(ds => ds <= td).length)}</span><span><i class="k-ok"></i>${t('calSafe')} ${cnt('ok')}</span><span><i class="k-mg"></i>${t('calMargin')} ${cnt('mg')}</span><span><i class="k-ov"></i>${t('calOver')} ${cnt('ov')}</span></div>`;
+  return { grid: `<div class="cgrid${opts.mini ? ' cmini' : ''}">${h}</div>`, legend, safe };
+}
+const shortC = v => v >= 1e6 ? (Math.round(v / 1e5) / 10).toString().replace('.', lang === 'id' ? ',' : '.') + (lang === 'id' ? 'jt' : 'M') : v >= 1e3 ? Math.round(v / 1e3) + (lang === 'id' ? 'rb' : 'k') : String(Math.round(v));
+const delta = (now, prev, goodUp) => {
+  const d = now - prev;
+  if (!d) return `<span class="dl">${t('sameYest')}</span>`;
+  const up = d > 0, good = up === goodUp;
+  return `<span class="dl ${good ? 'g' : 'b'}">${up ? '▲' : '▼'} ${rp(Math.abs(d))} ${t('vsYest')}</span>`;
+};
+
 const VIEWS = {
   setup() {
     return `${stack.length > 1 ? head(t('settings'), { back: true }) : ''}<div class="stack" style="padding-top:${stack.length > 1 ? 0 : 20}px">
@@ -555,12 +689,18 @@ const VIEWS = {
           <div style="text-align:right"><p class="lab">${t('expMonth')}</p><p class="out" style="margin:3px 0 0;font-weight:700">${rp(-k.ExpThis)}</p></div>
         </div>
       </section>
+      ${(() => { const a = dayTotals(todayIso()), yd = new Date(); yd.setDate(yd.getDate() - 1); const b = dayTotals(iso(yd));
+        return `<section class="card today-card"><p class="lab">${t('todayT')}</p><div class="tgrid">
+        <div><p class="tl">${t('incToday')}</p><p class="tv in">${rp(a.inc, 1)}</p>${delta(a.inc, b.inc, true)}</div>
+        <div><p class="tl">${t('expToday')}</p><p class="tv out">${rp(-a.exp)}</p>${delta(a.exp, b.exp, false)}</div></div></section>`; })()}
       <section class="card status-${st}">
         <div class="row"><p class="lab c-${st}">${t('safeToday')}</p><span class="c-${st}" style="font-size:12px;font-weight:700">${stTxt}</span></div>
         <p class="big" data-count="${Math.max(safe, 0)}" data-key="safe">${rp(Math.max(safe, 0))}</p>
         <div class="bar" style="margin-top:8px"><span data-w="${Math.min(100, used * 100).toFixed(1)}%" style="background:${bcol}"></span></div>
         <p class="muted" style="margin:7px 0 0">${lim > 1 ? t('usedOf')(rp(spent), rp(lim)) : '—'}</p>
       </section>
+      ${(() => { const cg = calGrid(todayIso().slice(0, 7), { mini: true });
+        return `<section class="card press" data-go="cal"><div class="row"><p class="lab">${t('spendCal')}</p><button class="link press" data-go="cal">${t('detail')}</button></div>${cg.grid}${cg.legend}</section>`; })()}
       ${buckets.length ? `<section class="card">
         <div class="row"><p class="lab">${t('budget')} ${esc(s.period || '')}</p><button class="link press" data-go="budget">${t('detail')}</button></div>
         <div class="stack" style="gap:10px;margin-top:4px">${buckets.slice(0, 4).map((b, i) => {
@@ -619,7 +759,7 @@ const VIEWS = {
     const item = (go, c, lab, sub) => `<button class="tx press" data-go="${go}" style="min-height:56px"><div class="dot" style="background:${c[0]};color:${c[1]}">${esc(initials(lab))}</div><div class="grow"><b>${lab}</b><div class="muted">${sub}</div></div><span style="width:20px;color:#8A8A8A">${ic('chev')}</span></button>`;
     const k = kpi(); const s = S() || {};
     const nd = (s.debts || []).filter(d => num(d.owesMe) || num(d.iOwe)).length;
-    return `${head(t('more'), { right: `<button class="ibtn press" data-go="settings" aria-label="${t('setTitle')}">${ic('gear')}</button>` })}
+    return `${head(t('more'), { right: `<button class="ibtn press" data-go="guide" aria-label="${t('guide')}">${ic('book')}</button><button class="ibtn press" data-go="settings" aria-label="${t('setTitle')}">${ic('gear')}</button>` })}
     <div class="stack">
       <section class="card status-${st[0]}">
         <div class="row"><p class="lab c-${st[0]}">${t('sync')}</p><span class="c-${st[0]}" style="font-size:12px;font-weight:700">${st[1]}</span></div>
@@ -728,6 +868,26 @@ const VIEWS = {
       </section>
     </div>`;
   },
+  cal() {
+    const m = VIEWS.cal.m || todayIso().slice(0, 7), sel = VIEWS.cal.d || (m === todayIso().slice(0, 7) ? todayIso() : '');
+    const [yy, mm] = m.split('-').map(Number), cg = calGrid(m, { sel });
+    const list = sel ? allTx().filter(o => o.date === sel) : [];
+    const by = unplannedByDay(m), tot = Object.values(by).reduce((a, v) => a + v, 0);
+    return `${head(t('spendCal'), { back: true })}
+    <div class="stack">
+      <div class="row"><button class="ibtn press" data-cal-m="-1" aria-label="prev">${ic('left')}</button><b style="font-size:16px">${t('months')[mm - 1]} ${yy}</b><button class="ibtn press" data-cal-m="1" aria-label="next">${ic('right')}</button></div>
+      <section class="card">${cg.grid}${cg.legend}<p class="muted" style="margin:8px 0 0">${t('calSpent')}: <b>${rp(tot)}</b> · ${t('calLimit')(rp(cg.safe))}</p></section>
+      ${sel ? `<section class="card" style="padding-top:4px"><p class="lab daylab">${esc(dayLabel(sel))}</p>${list.length ? list.map(txRow).join('') : `<p class="empty">${t('nothing')}</p>`}</section>` : ''}
+    </div>`;
+  },
+  guide() {
+    const G = GUIDE[lang] || GUIDE.id;
+    return `${head(t('guide'), { back: true })}
+    <div class="stack">
+      <section class="card guide-hero"><span class="brand"><span class="v">V</span>NANCIAL</span><p style="margin:6px 0 0">${t('guideSub')}</p><p class="muted" style="margin:4px 0 0">${t('version')} ${APP_VER}</p></section>
+      <section class="card" style="padding:4px 0">${G.map(([h, icn, body], i) => `<details class="gsec"${i === 0 ? ' open' : ''}><summary class="press"><span class="gic">${ic(icn)}</span><b>${h}</b><span class="gch">${ic('chev')}</span></summary><div class="gbody">${body}</div></details>`).join('')}</section>
+    </div>`;
+  },
   budget() {
     const s = S() || {}; const b = (s.buckets || []).filter(x => x.name);
     const k = kpi();
@@ -741,7 +901,7 @@ const VIEWS = {
     </div>`;
   }
 };
-VIEWS.tx.f = 'all';
+VIEWS.tx.f = 'all'; VIEWS.cal.m = ''; VIEWS.cal.d = '';
 function langCard() {
   return `<section class="card"><div class="row"><div><p class="lab">${t('language')}</p><p class="muted" style="margin:2px 0 0">${t('langNote')}</p></div>
     <div class="switch" role="group" aria-label="${t('language')}"><button class="chip press ${lang === 'id' ? 'on' : ''}" data-lang="id">Indonesia</button><button class="chip press ${lang === 'en' ? 'on' : ''}" data-lang="en">English</button></div></div></section>`;
@@ -763,6 +923,8 @@ function bind(root) {
   root.querySelectorAll('[data-month]').forEach(el => el.onclick = () => { vib(); const m = VIEWS.tx.m || todayIso().slice(0, 7); const d = new Date(+m.slice(0, 4), +m.slice(5) - 1 + Number(el.dataset.month), 1); VIEWS.tx.m = iso(d).slice(0, 7); rerender(); });
   root.querySelectorAll('[data-search]').forEach(el => el.onclick = () => { VIEWS.tx.searching = !VIEWS.tx.searching; if (!VIEWS.tx.searching) VIEWS.tx.q = ''; rerender(); const q = $('#q'); q && q.focus(); });
   const q = $('#q', root); if (q) q.oninput = () => { VIEWS.tx.q = q.value; clearTimeout(q._t); q._t = setTimeout(() => { const pos = q.selectionStart; rerender(); const n = $('#q'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); };
+  root.querySelectorAll('[data-cal-m]').forEach(el => el.onclick = () => { vib(); const m = VIEWS.cal.m || todayIso().slice(0, 7); const d = new Date(+m.slice(0, 4), +m.slice(5) - 1 + Number(el.dataset.calM), 1); VIEWS.cal.m = iso(d).slice(0, 7); VIEWS.cal.d = ''; rerender(); });
+  root.querySelectorAll('[data-cal-d]').forEach(el => el.onclick = e => { e.stopPropagation(); vib(); if (stack[stack.length - 1] !== 'cal') { VIEWS.cal.m = el.dataset.calD.slice(0, 7); VIEWS.cal.d = el.dataset.calD; go('cal'); } else { VIEWS.cal.d = el.dataset.calD; rerender(); } });
   root.querySelectorAll('[data-settled]').forEach(el => el.onclick = () => { vib(); VIEWS.debt.settled = el.dataset.settled === '1'; rerender(); });
   const sv = $('#s-save', root); if (sv) sv.onclick = async () => {
     const url = $('#s-url').value.trim(), tok = $('#s-token').value.trim();
