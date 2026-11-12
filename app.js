@@ -1,6 +1,6 @@
 /* Vnancial – phone app (PWA). Data: snapshot.json from Excel via Apps Script; new entries go to the Drive inbox. */
 'use strict';
-const APP_VER = '1.9.0';
+const APP_VER = '2.0.0';
 const $ = (s, el = document) => el.querySelector(s);
 const LS = {
   get(k, d) { try { const v = localStorage.getItem('vn.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -191,7 +191,7 @@ async function sync(manual) {
     if (j.snapshot) { snap = j.snapshot; LS.set('snap', snap); }
     pending = j.pending || []; LS.set('pending', pending);
     // a deletion is finished once its Delete row has been read by Excel (no longer waiting anywhere)
-    const waitingDel = new Set(pending.concat(queue).filter(r => String(r.Type).toLowerCase() === 'delete').map(r => String(r.Description)));
+    const waitingDel = new Set(pending.concat(queue).filter(r => tyOf(r) === 'delete').map(r => String(r.Description)));
     Object.keys(deleted).forEach(ref => { if (!waitingDel.has(ref)) delete deleted[ref]; }); LS.set('deleted', deleted);
     lastSync = new Date().toISOString(); LS.set('lastSync', lastSync);
     online = true;
@@ -219,11 +219,11 @@ function accHex(name, raw) {  // same rules as Excel: palette name, #RRGGBB, or 
 function inkOn(hex) { const n = parseInt(String(hex).slice(1), 16); const l = 0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255); return l > 150 ? '#262626' : '#FFFFFF'; }
 let setOv = LS.get('setOv', null);              // settings saved on the phone, until Excel sends them back
 let deleted = LS.get('deleted', {});            // ref -> entry deleted on the phone, until Excel removed it
-function S() {
+function S0() {
   const base = cfg.demo ? DEMO() : snap;
   if (!setOv || !base) return base;
   const gen = base.generated ? new Date(base.generated).getTime() : 0;
-  const waiting = pending.concat(queue).some(r => String(r.Type).toLowerCase() === 'setting');
+  const waiting = pending.concat(queue).some(r => tyOf(r) === 'setting');
   if (!cfg.demo && gen > setOv.at && !waiting) { setOv = null; LS.set('setOv', null); return base; }
   const o = Object.assign({}, base), d = setOv.data;
   o.prefs = Object.assign({}, base.prefs || {}, d.prefs);
@@ -235,7 +235,7 @@ function S() {
   return o;
 }
 function rowsOf(type) {
-  const s = S(); if (!s) return [];
+  const s = S0(); if (!s) return [];
   const key = { Expense: 'expense', Income: 'income', Transfer: 'transfer', Debt: 'debt', Investment: 'investment' }[type];
   return (s[key] || []);
 }
@@ -264,12 +264,14 @@ function allTxRaw() {
   excelRaw().forEach(r => push(fromRow(r, 'ok')));
   const excelRefs = new Set(out.map(o => o.ref).filter(Boolean));
   const later = pending.map(r => [r, 'pending']).concat(queue.map(r => [r, 'queued']));
-  later.forEach(([r, st]) => { const ty = String(r.Type).toLowerCase(); if (!ty.startsWith('edit:') && !excelRefs.has(r.Ref)) push(fromRow(r, st)); });
+  later.forEach(([r, st]) => { const ty = tyOf(r); if (!ty.startsWith('edit:') && !excelRefs.has(r.Ref)) push(fromRow(r, st)); });
+  const exM = exStamps();
   const del = delSet(); out.forEach(o => { o.del = !!(o.ref && del.has(o.ref)); });
   // edits: the old version stops counting, the new one counts until Excel has it
   later.forEach(([r, st]) => {
-    const ty = String(r.Type).toLowerCase(); if (!ty.startsWith('edit:')) return;
-    const nw = fromRow(Object.assign({}, r, { Type: r.Type.slice(5) }), st); if (!nw) return;
+    const ty = tyOf(r); if (!ty.startsWith('edit:')) return;
+    if (excelRefs.has(r.Ref) && newer(exM, r.Ref, stOf(r))) return;          // changed in Excel after this edit: Excel wins
+    const nw = fromRow(Object.assign({}, r, { Type: String(r.Type).split('@')[0].slice(5) }), st); if (!nw) return;
     const i = out.findIndex(o => o.ref === r.Ref && !o.del && !o.replaced);
     if (i >= 0) { const old = out[i]; if (old.st === 'ok') old.del = true; else out.splice(i, 1); }
     nw.replaced = false; nw.del = del.has(r.Ref) && !excelRefs.has(r.Ref) ? true : false;
@@ -278,9 +280,16 @@ function allTxRaw() {
   out.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (a.st === 'ok') - (b.st === 'ok'));
   return out;
 }
+const tyOf = r => String(r.Type || '').split('@')[0].toLowerCase();
+const stOf = r => String(r.Type || '').split('@')[1] || '';
+const stampMs = ms => { const d = new Date(ms); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; };
+// Excel row stamps (yyyymmddhhnnss of the last change made in Excel); latest change wins
+function exStamps() { const m = {}; ['expense', 'income', 'transfer', 'debt', 'investment'].forEach(k => ((S0() || {})[k] || []).forEach(r => { if (r.Ref) m[r.Ref] = String(r._m || '0'); })); return m; }
+const newer = (exM, ref, stamp) => !!stamp && Number(exM[ref] || 0) > Number(stamp);
 function delSet() {
-  const d = new Set(Object.keys(deleted));
-  pending.concat(queue).forEach(r => { if (String(r.Type).toLowerCase() === 'delete') d.add(String(r.Description)); });
+  const exM = exStamps(), d = new Set();
+  Object.keys(deleted).forEach(k => { if (!newer(exM, k, stampMs(deleted[k]))) d.add(k); });
+  pending.concat(queue).forEach(r => { if (tyOf(r) === 'delete' && !newer(exM, String(r.Description), stOf(r))) d.add(String(r.Description)); });
   return d;
 }
 function allTx() { return allTxRaw().filter(o => !o.del); }
@@ -303,29 +312,8 @@ function effect(o) { // per-account change
   if (o.sign === -1) Object.keys(d).forEach(k => d[k] = -d[k]);
   return d;
 }
-function accounts() {
-  const s = S(); const list = (s && s.accounts || []).map(a => ({ name: a.name, type: a.type || '', balance: num(a.balance), color: a.color || accHex(a.name, a.colorName) }));
-  unseen().forEach(o => { const e = effect(o); Object.keys(e).forEach(k => { const a = list.find(x => x.name === k); if (a) a.balance += e[k]; }); });
-  return list;
-}
-function kpi() {
-  const s = S(); const k = Object.assign({}, s && s.kpi || {});
-  const ms = todayIso().slice(0, 7), td = todayIso();
-  let dBal = 0, dInc = 0, dExp = 0, dToday = 0;
-  unseen().forEach(o => {
-    const e = effect(o); Object.values(e).forEach(v => dBal += v);
-    const sg = o.sign || 1;
-    if ((o.date || '').slice(0, 7) === ms) { if (o.type === 'Income') dInc += sg * o.amt; if (o.type === 'Expense') dExp += sg * o.amt; }
-    if (o.type === 'Expense' && o.date === td) dToday += sg * o.amt;
-  });
-  k.TotalBalance = num(k.TotalBalance) + dBal; k.IncThis = num(k.IncThis) + dInc; k.ExpThis = num(k.ExpThis) + dExp;
-  k.SafeToday = num(k.SafeToday) - dToday; k.TodayUnpl = num(k.TodayUnpl) + dToday;
-  if (s && s.today && !cfg.demo && S()) recalcSafe(k, s, staleDays(), ms, td);
-  return k;
-}
-function dayDiff(a, b) { return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000); }
-function staleDays() { const s = S(); if (!s || !s.today || cfg.demo) return 0; return Math.max(0, dayDiff(String(s.today).slice(0, 10), todayIso())); }
-
+function accounts() { const e = engine(); return e ? e.accounts : []; }
+function kpi() { const e = engine(); return e ? Object.assign({}, e.kpi) : {}; }
 /* ---- planner maths (same rules as the Excel _Calc sheet) ---- */
 const pd = x => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(x || '')); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
 const dim = (y, m) => new Date(y, m + 1, 0).getDate();
@@ -351,9 +339,8 @@ function planTerms(list, T, pr, sameMonth) {
     if (an && (!last || an > last)) last = an;
   });
   let hEnd = PEnd, res = 0;
-  if (hOn) {
-    const hd = pd(pr.HorizonDate);
-    hEnd = hd ? hd : new Date((last && last > T ? last : T).getTime() + num(pr.HorizonDays) * 86400000);
+  {
+    if (hOn) { const hd = pd(pr.HorizonDate); hEnd = hd ? hd : new Date((last && last > T ? last : T).getTime() + num(pr.HorizonDays) * 86400000); }
     if (hEnd < T) hEnd = T;
     P.forEach(p => {
       let cnt;
@@ -364,72 +351,144 @@ function planTerms(list, T, pr, sameMonth) {
   }
   return { open, daily, res, hOn, hDays: Math.max(1, dd(T, hEnd) + 1), dl: dim(T.getFullYear(), T.getMonth()) - T.getDate() + 1 };
 }
-function excelOpenPlans() {
-  const s = S() || {};
-  return (s.plans || []).filter(p => p.Item && num(p.Amount) > 0 && !/^(done|off)$/i.test(String(p.Status || '')))
-    .map(p => ({ date: p.Date, type: p.Type || 'Expense', amt: num(p.Amount), repeat: p.Repeat || 'Once', until: p.Until }));
+/* ---------------------------------------------------------------- engine
+   The phone computes every figure itself from the full data (Excel rows + phone entries, edits, deletes),
+   with exactly the same rules as the Excel workbook, so it never has to wait for Excel. */
+function engineKey() {
+  const s = snap || {};
+  return [cfg.demo ? 'demo' : '', s.generated || '', todayIso(), setOv ? setOv.at : '', Object.keys(deleted).join(','),
+    pending.map(r => r.Ref + r.Type + r.Amount + r.Date).join(';'), queue.map(r => r.Ref + r.Type + r.Amount + r.Date + r.Account + r.Category + r.SubCategory + r.Description + r.ToAccount + r.Party).join(';')].join('|');
 }
+function engine() {
+  const key = engineKey(); if (engine.k === key) return engine.v;
+  const s = S0(); if (!s) { engine.k = key; engine.v = null; return null; }
+  const pr = s.prefs || {}, td = todayIso(), T = pd(td), Y = T.getFullYear(), M = T.getMonth();
+  const PS = iso(new Date(Y, M, 1)), PE = iso(new Date(Y, M + 1, 0));
+  const QS = iso(new Date(Y, M - 1, 1)), QE = iso(new Date(Y, M, 0)), A3 = iso(new Date(Y, M - 3, 1));
+  const od = String(pr.OpenDate || '').slice(0, 10), inOpen = d => !od || d >= od;
+  const yes = v => String(v || '').trim().toLowerCase() === 'yes';
+  const debtOn = yes(pr.DebtOn), invOn = yes(pr.InvOn);
+  const d10 = v => String(v || '').slice(0, 10);
+  const btw = (d, a, b) => d >= a && d <= b;
+  const tx = allTx().map(o => Object.assign({}, o, { d: d10(o.date) }));
+  const inv = invTx().map(o => ({ ref: o.ref, st: o.st, d: d10(o.raw.Date), tick: String(o.raw.Description || '').toUpperCase().trim(), act: String(o.raw.Category || ''),
+    units: num(o.raw.SubCategory), price: num(o.raw.Amount), fee: num(o.raw.Fee), acc: o.raw.Account || '' }));
+  // dividends recorded on the phone: Excel adds an Income row "<ref>-DIV" when it reads them
+  const incRefs = new Set(tx.filter(o => o.type === 'Income').map(o => o.ref));
+  inv.filter(v => v.st !== 'ok' && v.act === 'Dividend' && !incRefs.has(v.ref + '-DIV')).forEach(v =>
+    tx.push({ type: 'Income', d: v.d, date: v.d, acc: v.acc, amt: v.price - v.fee, ref: v.ref + '-DIV', raw: { Category: 'Passive Income' } }));
 
-/* Daily limit computed on the phone. Used whenever Excel's own figure may be out of date:
-   Excel snapshot is >= 1 day old, or the phone holds entries / plans / settings Excel has not read yet. */
-function recalcSafe(k, s, sa, ms, td) {
-  const T = pd(td), kp = s.kpi || {}, pr = s.prefs || {};
-  const eff = openPlans().map(p => ({ date: p.date, type: p.type, amt: p.amt, repeat: p.repeat, until: p.until }));
-  const sig = a => JSON.stringify(a.map(p => [String(p.date).slice(0, 10), p.type, p.amt, p.repeat, String(p.until || '').slice(0, 10)]).sort());
-  const plansChanged = sig(eff) !== sig(excelOpenPlans());
-  const needs = sa > 0 || plansChanged || unseen().length > 0 || !!setOv;
-  if (!needs) return;
-  k.stale = sa;
-  const sameMonth = String(s.today).slice(0, 7) === ms;
-  const subs = ((s.lists || {}).subcats || []);
-  const info = (cat, sub) => subs.find(x => x.cat === cat && x.sub === sub) || {};
-  let unplToday = 0, dBudget = 0;
-  unseen().forEach(o => {
-    if (o.type !== 'Expense') return;
-    const sg = o.sign || 1, raw = o.raw || {}, si = info(raw.Category, raw.SubCategory);
-    const fixed = String(si.fixed || '').toLowerCase() === 'yes', sav = si.bucket === 'Savings';
-    if (o.date === td && !fixed && !sav) unplToday += sg * o.amt;
-    if ((o.date || '').slice(0, 7) === ms && !sav) dBudget += sg * o.amt;
+  // ---- account balances (Settings › Accounts)
+  const accs = (s.accounts || []).filter(a => a.name).map(a => ({ name: a.name, type: a.type || '', opening: num(a.opening), colorName: a.colorName || '',
+    color: a.color || accHex(a.name, a.colorName), balance: num(a.opening) }));
+  const A = {}; accs.forEach(a => { if (!(a.name in A)) A[a.name] = a; });
+  const mv = (n, v) => { if (n && A[n]) A[n].balance += v; };
+  tx.forEach(o => {
+    if (!inOpen(o.d)) return;
+    if (o.type === 'Income') mv(o.acc, o.amt);
+    else if (o.type === 'Expense') mv(o.acc, -o.amt);
+    else if (o.type === 'Transfer') { mv(o.acc2, o.amt); mv(o.acc, -o.amt - (o.fee || 0)); }
+    else if (o.type === 'Debt' && debtOn) mv(o.acc, (o.act === 'Borrow' || o.act === 'Collect') ? o.amt : (o.act === 'Repay' || o.act === 'Lend') ? -o.amt : 0);
   });
-  const unpl = sa > 0 ? unplToday : num(kp.TodayUnpl) + unplToday;
-  const cash = pr.SafeBasis === 'Cash balance', margin = num(pr.SafeMargin) || 0.8;
-  const pt = planTerms(eff, T, pr);
-  let allow = null;
-  if (pt.hOn) {
-    allow = Math.max(0, num(k.TotalBalance) + unpl - pt.res) / pt.hDays;
-  } else if (sameMonth) {
-    const dl = pt.dl;
-    const pool = cash ? num(k.TotalBalance) + unpl - pt.open : num(kp.BudgetLeft) - dBudget + unpl - pt.open - num(kp.FixedReserve);
-    allow = Math.max(0, Math.max(0, pool) / dl + pt.daily);
-  }
-  if (allow === null) { k.staleMonth = true; k.SafeToday = 0; k.TodayUnpl = unpl; return; }
-  const as = Math.round(margin * allow / 100) * 100;
-  k.AllowSafe = as; k.TodayUnpl = unpl; k.SafeToday = as - unpl;
+  if (invOn) inv.forEach(v => { if (!inOpen(v.d)) return;
+    if (v.act === 'Buy') mv(v.acc, -(v.units * v.price + v.fee)); else if (v.act === 'Sell') mv(v.acc, v.units * v.price - v.fee); });
+  // accounts with the same name: Excel computes each row the same way
+  accs.forEach(a => { if (A[a.name] !== a) a.balance = A[a.name].balance; });
+  const TotalBalance = accs.reduce((x, a) => x + a.balance, 0);
+
+  // ---- month totals
+  const sumE = (f) => tx.filter(o => o.type === 'Expense' && f(o)).reduce((x, o) => x + o.amt, 0);
+  const sumI = (f) => tx.filter(o => o.type === 'Income' && f(o)).reduce((x, o) => x + o.amt, 0);
+  const fees = (f) => tx.filter(o => o.type === 'Transfer' && f(o)).reduce((x, o) => x + (o.fee || 0), 0);
+  const IncThis = sumI(o => btw(o.d, PS, PE)), IncLast = sumI(o => btw(o.d, QS, QE)), Inc3Avg = sumI(o => o.d >= A3 && o.d < PS) / 3;
+  const ExpThis = sumE(o => btw(o.d, PS, PE)) + fees(o => btw(o.d, PS, PE));
+  const bm = String(pr.BasisMethod || '');
+  const Basis = bm === 'Manual' ? num(pr.BasisManual) : bm === 'This Month' ? IncThis : bm === 'Average 3 Months' ? Inc3Avg : IncLast;
+
+  // ---- buckets (Settings › Buckets + Sub-categories)
+  const subs = ((s.lists || {}).subcats || []).filter(x => x.sub);
+  const ce = (x, f) => sumE(o => (o.raw || {}).Category === x.cat && (o.raw || {}).SubCategory === x.sub && f(o));
+  const isFeeSub = x => x.cat === pr.FeeCat && x.sub === pr.FeeSub;
+  const subMonth = subs.map(x => ce(x, o => btw(o.d, PS, PE)) + (isFeeSub(x) ? fees(o => btw(o.d, PS, PE)) : 0));
+  const bk = (s.buckets || []).slice(0, 4).map(b => ({ name: b.name, share: num(b.share) }));
+  while (bk.length < 4) bk.push({ name: '', share: 0 });
+  bk.forEach(b => { b.target = Basis * b.share; b.actual = b.name ? subs.reduce((x, y, i) => x + (y.bucket === b.name ? subMonth[i] : 0), 0) : 0; });
+  const savName = bk[3].name;
+  const SpendBudget = bk[0].target + bk[1].target + bk[2].target, SpentNonSav = ExpThis - bk[3].actual, BudgetLeft = SpendBudget - SpentNonSav;
+
+  // ---- today's unplanned spending
+  const TodayTotal = sumE(o => o.d === td) + fees(o => o.d === td);
+  const TodayExcl = subs.reduce((x, y) => x + ((yes(y.fixed) || y.bucket === savName) ? ce(y, o => o.d === td) : 0), 0);
+  const TodayPlanDone = (s.plans || []).filter(p => p.Type === 'Expense' && p.Status === 'Done' && d10(p.Date) === td).reduce((x, p) => x + num(p.Amount), 0);
+  const TodayUnpl = Math.max(0, TodayTotal - TodayExcl - TodayPlanDone);
+  const fixedIn = (a, b) => subs.reduce((x, y) => x + ((yes(y.fixed) && y.bucket !== savName) ? ce(y, o => btw(o.d, a, b)) : 0), 0);
+  const FixedReserve = Math.max(0, fixedIn(QS, QE) - fixedIn(PS, PE));
+
+  // ---- safe to spend (same rules as _Calc)
+  const plans = openPlans().filter(p => p.st !== 'ok' || /^open$/i.test(p.status || '')).filter(p => p.st !== 'ok' || ['Expense', 'Income'].includes(p.type))
+    .map(p => ({ date: p.date, type: p.type, amt: p.amt, repeat: p.repeat, until: p.until }));
+  const pt = planTerms(plans, T, pr);
+  const cash = pr.SafeBasis === 'Cash balance';
+  const SafePool = cash ? TotalBalance + TodayUnpl - (pt.hOn ? pt.res : pt.open) : BudgetLeft + TodayUnpl - pt.open - FixedReserve;
+  const AllowTrue = pt.hOn ? Math.max(0, SafePool) / pt.hDays : (pt.dl === 0 ? 0 : Math.max(0, Math.max(0, SafePool) / pt.dl + pt.daily));
+  const AllowSafe = Math.round(num(pr.SafeMargin) * AllowTrue / 100) * 100;
+
+  // ---- debts per person
+  const P = {}, order = [];
+  tx.filter(o => o.type === 'Debt').slice().reverse().forEach(o => {
+    const n = (o.raw || {}).Party || ''; if (!n) return;
+    if (!(n in P)) { P[n] = 0; order.push(n); }
+    P[n] += (o.act === 'Lend' || o.act === 'Repay') ? o.amt : (o.act === 'Borrow' || o.act === 'Collect') ? -o.amt : 0;
+  });
+  const debts = order.map(n => ({ person: n, owesMe: Math.max(0, P[n]), iOwe: Math.max(0, -P[n]), status: P[n] > 0 ? 'Owes me' : P[n] < 0 ? 'I owe' : 'Settled' }));
+
+  // ---- holdings (last price typed in Excel)
+  const hs = (s.holdings || []).filter(h => h.ticker).map(h => Object.assign({}, h));
+  inv.forEach(v => { if (v.tick && !hs.some(h => String(h.ticker).toUpperCase() === v.tick)) hs.push({ ticker: v.tick, name: '', type: '', platform: '', lastPrice: 0 }); });
+  hs.forEach(h => {
+    const my = inv.filter(v => v.tick === String(h.ticker).toUpperCase());
+    const bu = my.filter(v => v.act === 'Buy').reduce((x, v) => x + v.units, 0), su = my.filter(v => v.act === 'Sell').reduce((x, v) => x + v.units, 0);
+    const bc = my.filter(v => v.act === 'Buy').reduce((x, v) => x + v.units * v.price + v.fee, 0);
+    h.units = bu - su; h.avgCost = bu ? bc / bu : 0; h.value = h.units * num(h.lastPrice); h.pl = h.value - h.units * h.avgCost;
+  });
+  const InvValue = hs.reduce((x, h) => x + h.value, 0);
+
+  const kpi = { TotalBalance, IncThis, ExpThis, NetCF: IncThis - ExpThis, SavRate: IncThis ? (IncThis - ExpThis) / IncThis : 0, InvValue,
+    DebtTotal: debts.reduce((x, d) => x + d.iOwe, 0), RecvTotal: debts.reduce((x, d) => x + d.owesMe, 0),
+    SafeToday: AllowSafe - TodayUnpl, AllowSafe, AllowTrue, TodayUnpl, BudgetLeft, SpendBudget, SpentNonSav, DaysLeft: pt.dl,
+    PlanOpenMonth: pt.open, FixedReserve, PlanDaily: pt.daily, HorizonOnN: pt.hOn ? 1 : 0, HDays: pt.hDays, HReserve: pt.res, Basis };
+  engine.k = key; engine.v = { accounts: accs, kpi, buckets: bk.filter(b => b.name), debts, holdings: hs };
+  return engine.v;
+}
+function S() {
+  const b = S0(); if (!b) return b; const e = engine(); if (!e) return b;
+  return Object.assign({}, b, { kpi: e.kpi, accounts: e.accounts, buckets: e.buckets, debts: e.debts, holdings: e.holdings, period: `${t('months')[new Date().getMonth()]} ${new Date().getFullYear()}` });
 }
 function lists() {
-  const s = S() || {}; const l = s.lists || {};
+  const s = S0() || {}; const l = s.lists || {};
   const sub = (l.subcats || []).filter(x => x.cat);
   const expCats = (l.expenseCats || []).map(x => x.cat).filter(Boolean);
   const incCats = (l.incomeCats || []).map(x => x.cat).filter(Boolean);
   return { sub, expCats: expCats.length ? expCats : [...new Set(sub.map(x => x.cat))], incCats };
 }
 function openPlans() {
-  const s = S() || {}; const del = delSet();
+  const s = S0() || {}; const del = delSet();
   const ps = (s.plans || []).filter(p => p.Item && num(p.Amount) > 0 && !/^(done|off)$/i.test(String(p.Status || '')))
-    .map(p => ({ date: p.Date, item: p.Item, type: p.Type || 'Expense', cat: p.Category, amt: num(p.Amount), repeat: p.Repeat || 'Once', until: p.Until, st: 'ok', ref: '',
+    .map(p => ({ date: p.Date, item: p.Item, type: p.Type || 'Expense', cat: p.Category, amt: num(p.Amount), repeat: p.Repeat || 'Once', until: p.Until, st: 'ok', ref: '', status: String(p.Status || ''),
                  key: 'PLAN|' + String(p.Date || '').slice(0, 10) + '|' + p.Item + '|' + num(p.Amount) }));
-  pending.map(r => [r, 'pending']).concat(queue.map(r => [r, 'queued'])).filter(([r]) => String(r.Type).toLowerCase() === 'plan')
+  pending.map(r => [r, 'pending']).concat(queue.map(r => [r, 'queued'])).filter(([r]) => tyOf(r) === 'plan')
     .forEach(([r, st]) => ps.push({ date: r.Date, item: r.Description, type: r.SubCategory || 'Expense', cat: r.Category, amt: num(r.Amount), repeat: r.ToAccount || 'Once', until: '', notes: r.Notes || '', st, ref: r.Ref, key: '' }));
   return ps.filter(p => !(p.ref ? del.has(p.ref) : del.has(p.key))).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 }
 // investment transactions (Excel + not yet read), newest first
 function invTx() {
-  const s = S() || {}; const del = delSet(); const out = [];
+  const s = S0() || {}; const del = delSet(); const out = [];
   (s.investment || []).filter(r => r.Ticker).forEach(r => out.push({ ref: r.Ref || '', st: 'ok', raw: { Ref: r.Ref || '', Type: 'Investment', Date: r.Date, Description: clean(r.Ticker),
     Amount: num(r.Price), Category: clean(r.Action), SubCategory: r.Units == null ? '' : String(r.Units), Account: clean(r.Account), ToAccount: '', Party: '', Notes: '', Fee: num(r.Fee) || '' } }));
   const excelRefs = new Set(out.map(o => o.ref).filter(Boolean));
   pending.map(r => [r, 'pending']).concat(queue.map(r => [r, 'queued'])).forEach(([r, st]) => {
-    const ty = String(r.Type).toLowerCase();
+    const ty = tyOf(r);
+    if (ty === 'edit:investment' && excelRefs.has(r.Ref) && newer(exStamps(), r.Ref, stOf(r))) return;
     if (ty === 'investment' && !excelRefs.has(r.Ref)) out.push({ ref: r.Ref, st, raw: Object.assign({}, r) });
     if (ty === 'edit:investment') { const i = out.findIndex(o => o.ref === r.Ref); if (i >= 0) out.splice(i, 1); out.push({ ref: r.Ref, st, raw: Object.assign({}, r, { Type: 'Investment' }) }); }
   });
@@ -517,9 +576,7 @@ const txRow = o => {
 };
 const banner = () => {
   if (cfg.demo) return `<div class="card" style="background:#FFF3C4;padding:10px 14px"><span style="font-weight:600;font-size:13px;color:#6B5000">${t('demoOn')}</span></div>`;
-  if (!S()) return `<div class="card" style="background:#FFF3C4"><span style="font-size:13px;color:#6B5000">${t('snapshotOld')}</span></div>`;
-  const sd = staleDays();
-  if (sd > 0) return `<div class="card" style="background:#FFF3C4;padding:10px 14px"><span style="font-size:13px;color:#6B5000">${kpi().staleMonth ? t('staleMonth') : t('staleX')(sd)}</span></div>`;
+  if (!S0()) return `<div class="card" style="background:#FFF3C4"><span style="font-size:13px;color:#6B5000">${t('snapshotOld')}</span></div>`;
   return '';
 };
 
@@ -560,17 +617,19 @@ const GUIDE = {
     ['Mengubah dan menghapus', 'edit', `<ul><li>Ketuk transaksi di daftar untuk membuka, mengubah, atau menghapusnya (ikon tempat sampah).</li>
       <li><b>Utang</b>: ketuk nama orang untuk melihat seluruh riwayatnya.</li>
       <li><b>Rencana</b> dan <b>Investasi</b>: ketuk barisnya di halaman masing-masing.</li></ul>
-      <p class="gnote">Baris yang diketik langsung di Excel tanpa kode Ref tidak dapat diubah dari HP, kecuali rencana.</p>`],
+      <p class="gnote">Baris yang diketik langsung di Excel otomatis diberi Ref, jadi semuanya dapat diubah dari HP.</p>`],
     ['Rencana, Utang, Investasi, Anggaran', 'list', `<ul><li><b>Rencana</b>: daftar "Akan datang"; status Open memengaruhi batas harian.</li>
       <li><b>Utang</b>: ringkasan "Saya berutang" dan "Berutang ke saya", tombol Bayar/Terima cepat.</li>
       <li><b>Investasi</b>: posisi, nilai pasar, untung/rugi, dan riwayat transaksi.</li>
       <li><b>Anggaran</b>: realisasi tiap bucket terhadap targetnya.</li></ul>`],
     ['Dompet dan akun', 'wallet', `<p>Dompet menampilkan saldo per akun, dikelompokkan Bank, E-Wallet, dan Tunai. Warna akun diatur di <b>Pengaturan → Akun</b> (pilih dari palet atau isi kode #hex). Akun baru otomatis muncul di Excel dan HP.</p>`],
     ['Pengaturan', 'gear', `<p>Semua pengaturan Excel dapat diubah dari HP: preferensi, bucket anggaran, akun, kategori, sub-kategori, serta bahasa. Perubahan diterapkan ke Excel dalam ±1 menit saat Excel terbuka.</p>`],
-    ['Sinkronisasi dengan Excel', 'sync', `<ul><li>Entri dari HP dikirim ke folder Inbox Google Drive. Label <b>Menunggu</b> berarti sudah terkirim tetapi belum dibaca Excel; <b>Belum terkirim</b> berarti HP sedang offline dan akan dikirim otomatis.</li>
-      <li>Excel yang terbuka membaca Inbox setiap ±15 detik lalu memperbarui snapshot untuk HP.</li>
-      <li>Saat Excel tidak dibuka, HP menghitung saldo dan batas harian sendiri dari catatan di HP. Banner kuning menandai angka perkiraan.</li>
-      <li>Bila bulan sudah berganti dalam mode Anggaran, buka Excel sekali agar perhitungan bulan baru tersedia.</li></ul>`],
+    ['Sinkronisasi dengan Excel', 'sync', `<p>HP dan Excel <b>berdiri sendiri</b>: masing-masing menyimpan data lengkap dan menghitung semua angka dengan aturan yang sama, sehingga hasilnya identik. HP tidak perlu menunggu Excel dibuka.</p>
+      <ul><li>Entri dari HP dikirim ke folder Inbox Google Drive dan langsung dihitung di HP. Label <b>Menunggu</b> hanya berarti Excel belum menyalinnya; <b>Belum terkirim</b> berarti HP sedang offline.</li>
+      <li>Excel yang terbuka membaca Inbox setiap ±15 detik, lalu mengirim data terbarunya ke HP.</li>
+      <li>Setiap transaksi memiliki kode <b>Ref</b> unik; baris yang diketik langsung di Excel diberi Ref otomatis.</li>
+      <li><b>Perubahan terbaru menang</b>: bila transaksi yang sama diubah di HP dan di Excel sebelum keduanya sinkron, versi yang diubah paling akhir yang dipakai.</li></ul>
+      <p class="gnote">Harga terakhir investasi tetap diisi di Excel; HP memakai harga terakhir yang dikirim Excel.</p>`],
     ['Tips', 'star', `<ol><li>Catat segera setelah bertransaksi.</li><li>Masukkan semua pengeluaran besar yang sudah pasti ke Rencana.</li>
       <li>Lihat batas harian <b>sebelum</b> membeli, bukan sesudahnya.</li><li>Buka Excel sesekali agar semua angka diselaraskan penuh.</li></ol>`]
   ],
@@ -595,15 +654,17 @@ const GUIDE = {
       <li><b>Debt</b>: <i>Borrow</i>, <i>Repay</i>, <i>Lend</i>, <i>Collect</i>.</li><li><b>Plan</b>: an upcoming expense or income, once or monthly.</li><li><b>Investment</b>: buy, sell or dividend.</li></ul>
       <p class="gnote">Office reimbursement: record Debt → <i>Lend</i> to "Office", then <i>Collect</i> when repaid.</p>`],
     ['Editing and deleting', 'edit', `<ul><li>Tap an entry to edit or delete it (bin icon).</li><li><b>Debts</b>: tap a person to see their history.</li><li><b>Plans</b> and <b>Investments</b>: tap the row on their page.</li></ul>
-      <p class="gnote">Rows typed directly in Excel without a Ref cannot be edited from the phone, except plans.</p>`],
+      <p class="gnote">Rows typed directly in Excel get a Ref automatically, so all of them can be edited from the phone.</p>`],
     ['Plans, Debts, Investments, Budget', 'list', `<ul><li><b>Plans</b>: upcoming items; Open plans affect the daily limit.</li><li><b>Debts</b>: what you owe and are owed, with quick Pay/Receive.</li>
       <li><b>Investments</b>: holdings, market value, P/L and history.</li><li><b>Budget</b>: actual vs target per bucket.</li></ul>`],
     ['Wallet and accounts', 'wallet', `<p>Balances per account, grouped Bank, E-Wallet and Cash. Set account colours in <b>Settings → Accounts</b> (palette or #hex). New accounts appear in Excel and on the phone automatically.</p>`],
     ['Settings', 'gear', `<p>Every Excel setting can be changed here: preferences, buckets, accounts, categories, sub-categories and language. Changes reach Excel within about a minute while it is open.</p>`],
-    ['Syncing with Excel', 'sync', `<ul><li>Phone entries go to the Google Drive Inbox. <b>Waiting</b> = sent, not read by Excel yet; <b>Not sent</b> = offline, sent automatically later.</li>
-      <li>An open Excel reads the Inbox about every 15 seconds and refreshes the phone snapshot.</li>
-      <li>When Excel is closed, the phone estimates balances and the daily limit itself; a yellow banner marks estimates.</li>
-      <li>After a month change in Budget mode, open Excel once.</li></ul>`],
+    ['Syncing with Excel', 'sync', `<p>The phone and Excel are <b>independent</b>: each keeps the full data and computes every figure with the same rules, so the results are identical. The phone never waits for Excel.</p>
+      <ul><li>Phone entries go to the Google Drive Inbox and count on the phone at once. <b>Waiting</b> only means Excel has not copied them yet; <b>Not sent</b> means the phone is offline.</li>
+      <li>An open Excel reads the Inbox about every 15 seconds and sends its latest data to the phone.</li>
+      <li>Every entry has a unique <b>Ref</b>; rows typed directly in Excel get one automatically.</li>
+      <li><b>Latest change wins</b>: if the same entry is changed on the phone and in Excel before they sync, the most recent change is kept.</li></ul>
+      <p class="gnote">Investment last prices are still typed in Excel; the phone uses the last price Excel sent.</p>`],
     ['Tips', 'star', `<ol><li>Record right after each transaction.</li><li>Put every known large expense into Plans.</li><li>Check the limit <b>before</b> buying.</li><li>Open Excel now and then for a full reconciliation.</li></ol>`]
   ]
 };
@@ -615,7 +676,7 @@ function dayTotals(d) {
   return { inc, exp };
 }
 function unplannedByDay(month) {
-  const s = S() || {}; const subs = ((s.lists || {}).subcats || []);
+  const s = S0() || {}; const subs = ((s.lists || {}).subcats || []);
   const info = (c, x) => subs.find(y => y.cat === c && y.sub === x) || {};
   const out = {};
   allTx().forEach(o => {
@@ -627,7 +688,7 @@ function unplannedByDay(month) {
   return out;
 }
 function calGrid(month, opts = {}) {
-  const [y, m] = month.split('-').map(Number), k = kpi(), s = S() || {};
+  const [y, m] = month.split('-').map(Number), k = kpi(), s = S0() || {};
   const safe = Math.max(0, num(k.AllowSafe)), mg = num((s.prefs || {}).SafeMargin) || 0.8, allow = safe / mg;
   const by = unplannedByDay(month), td = todayIso(), first = new Date(y, m - 1, 1), n = new Date(y, m, 0).getDate();
   const lead = (first.getDay() + 6) % 7;
@@ -1004,7 +1065,7 @@ function drawAdd() {
       <div class="grid2">${inp('f-date', t('date'), F.date, 'type="date"')}${inp('f-fee', t('fee'), F.fee ? grp(F.fee) : '', 'inputmode="numeric"')}</div>
       ${inp('f-notes', t('notes'), F.notes, 'autocomplete="off"')}`;
   } else if (ty === 'Debt') {
-    const people = [...new Set(((S() || {}).debts || []).map(d => d.person).filter(Boolean))];
+    const people = [...new Set(((S0() || {}).debts || []).map(d => d.person).filter(Boolean))];
     body = `<div class="field"><span class="lab">${t('action')}</span>${chips(DEBT_ACTS, F.act, 'act')}</div>
       ${inp('f-party', t('person'), F.party, 'autocomplete="off" list="people"')}<datalist id="people">${people.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
       <div class="grid2">${inp('f-date', t('date'), F.date, 'type="date"')}${sel('acc', t('account'), F.acc)}</div>
@@ -1119,7 +1180,7 @@ function save() {
     const qi = queue.findIndex(q => q.Ref === ref && !/^(edit:|delete|setting)/i.test(String(q.Type)));
     queue = queue.filter(q => !(q.Ref === ref && /^edit:/i.test(String(q.Type))));
     if (F.editSt === 'queued' && qi >= 0) { const at = queue.findIndex(q => q.Ref === ref); queue[at] = r; }
-    else { r.Type = 'Edit:' + ty; queue.push(r); }
+    else { r.Type = 'Edit:' + ty + '@' + stampMs(Date.now()); queue.push(r); }
   } else queue.push(r);
   LS.set('queue', queue);
   const wasEdit = !!(F.editRef || F.editPlan);
@@ -1136,7 +1197,7 @@ function save() {
 
 function newRef() { return 'HP-' + iso(new Date()).replace(/-/g, '').slice(2) + new Date().toTimeString().slice(0, 8).replace(/:/g, '') + '-' + Math.random().toString(36).slice(2, 6).toUpperCase(); }
 function cmdRow(type, extra) {
-  return Object.assign({ Ref: newRef(), Type: type, Date: todayIso(), Description: '', Amount: 1, Category: '', SubCategory: '', Account: '', ToAccount: '', Party: '', Notes: '', Fee: '', _at: Date.now() }, extra);
+  return Object.assign({ Ref: newRef(), Type: type === 'Delete' ? 'Delete@' + stampMs(Date.now()) : type, Date: todayIso(), Description: '', Amount: 1, Category: '', SubCategory: '', Account: '', ToAccount: '', Party: '', Notes: '', Fee: '', _at: Date.now() }, extra);
 }
 function deleteEntry(ref, st) {
   vib();
@@ -1187,7 +1248,7 @@ const PALETTE = [['BCA Blue', '#005BAC'], ['BRI Blue', '#00529B'], ['BNI Orange'
   ['GoPay Green', '#00AA13'], ['DANA Blue', '#118EEA'], ['Shopee Orange', '#EE4D2D'], ['OVO Purple', '#4C3494'], ['Cash Green', '#2E7D32'],
   ['Red', '#C0392B'], ['Teal', '#00897B'], ['Gray', '#6B6B6B'], ['Black', '#262626']];
 function curSettings() {
-  const s = S() || {}; const l = s.lists || {};
+  const s = S0() || {}; const l = s.lists || {};
   return {
     prefs: Object.assign({}, s.prefs || {}),
     accounts: (s.accounts || []).filter(a => a.name).map(a => ({ name: a.name, type: a.type || 'Other', opening: num(a.opening), colorName: a.colorName || '' })),
@@ -1331,7 +1392,7 @@ VIEWS.settings = function () {
   <div class="stack">
     ${langCard()}
     <section class="card" style="padding-top:4px;padding-bottom:4px"><button class="tx press" data-go="setup" style="min-height:52px"><div class="grow"><b>${t('connection')}</b><div class="muted">${cfg.demo ? t('demoOn') : cfg.url ? t('connected') : t('notSet')}</div></div><span style="width:18px;color:#8A8A8A">${ic('chev')}</span></button></section>
-    ${S() ? `
+    ${S0() ? `
     <section class="card" style="padding-top:4px"><p class="lab daylab">${t('prefs')}</p>${PREFS.map(([k, type], i) => row('pref', i, t('pl_' + k), '', fmtPref(k, d.prefs[k], type === 'expcat' || type === 'feesub' ? 'text' : type))).join('')}</section>
     <section class="card" style="padding-top:4px"><div class="row"><p class="lab daylab">${t('alloc')}</p><span class="${tot === 100 ? 'c-ok' : 'c-bad'}" style="font-size:12px;font-weight:700;padding-top:12px">${t('total')} ${tot}%${tot === 100 ? '' : ' · ' + t('mustTotal')}</span></div>
       ${d.buckets.map((b, i) => row('bucket', i, b.name, '', Math.round(b.share * 100) + '%')).join('')}</section>
